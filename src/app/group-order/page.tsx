@@ -84,27 +84,24 @@ export default function GroupOrderIndexPage() {
       </div>
 
       {/* Hero Header Cà Xòi */}
-      <div 
-        style={{ backgroundColor: "#140A06" }}
-        className="bg-coffee-950 bg-gradient-to-br from-[#140A06] via-[#23120B] to-[#3B1E13] rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden border border-pink-900/30"
-      >
-        <div className="absolute -right-10 -bottom-10 w-64 h-64 bg-pink-500/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="bg-gradient-to-br from-[#FFFDF9] via-[#FFF4F8] to-[#FFE7F0] rounded-3xl p-6 sm:p-8 text-coffee-950 shadow-sm relative overflow-hidden border border-pink-200/80">
+        <div className="absolute -right-10 -bottom-10 w-64 h-64 bg-pink-300/20 rounded-full blur-3xl pointer-events-none" />
         
-        <div className="relative z-10 flex flex-col sm:flex-row items-center justify-between gap-6">
-          <div className="max-w-xl space-y-3">
-            <div className="inline-flex items-center gap-1.5 bg-pink-500/20 border border-pink-400/30 px-3 py-1 rounded-full text-xs font-semibold text-pink-200">
-              <Users className="w-3.5 h-3.5 text-pink-300" /> 🐾 Gom đơn nhóm văn phòng Cà Xòi
+        <div className="relative z-10 grid grid-cols-1 sm:grid-cols-12 items-center gap-6">
+          <div className="sm:col-span-9 space-y-3">
+            <div className="inline-flex items-center gap-1.5 bg-pink-100 border border-pink-200 px-3 py-1 rounded-full text-xs font-semibold text-rose-800">
+              <Users className="w-3.5 h-3.5 text-rose-600" /> 🐾 Gom đơn nhóm văn phòng Cà Xòi
             </div>
-            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-coffee-950">
               Đặt Cà Phê Nhóm Cà Xòi
             </h1>
-            <p className="text-sm text-pink-100/90 leading-relaxed">
+            <p className="text-sm text-coffee-800 leading-relaxed">
               Tạo phòng gom đơn chỉ trong 10 giây, gửi link cho đồng nghiệp tự chọn ly hoặc chai rót theo khẩu vị riêng (size, đường, đá, topping trứng muối), dán tem in tên từng người và tính sẵn tiền chia cho cả nhóm!
             </p>
           </div>
 
           {/* Right Logo Card */}
-          <div className="relative shrink-0 flex flex-col items-center justify-center p-3 bg-white/10 rounded-3xl border border-white/20">
+          <div className="sm:col-span-3 relative flex flex-col items-center justify-center p-3 bg-white/85 rounded-3xl border border-pink-200/80 shadow-sm mx-auto w-full max-w-[160px] sm:max-w-none">
             <div className="w-24 h-24 rounded-2xl overflow-hidden border border-pink-300 shadow-md bg-[#FFD1E3] relative">
               <Image
                 src="/images/ca-xoi-logo.jpg"
@@ -113,7 +110,7 @@ export default function GroupOrderIndexPage() {
                 className="object-cover"
               />
             </div>
-            <span className="text-[11px] font-bold text-pink-200 mt-2">Cà Xòi • Đà Nẵng</span>
+            <span className="text-[11px] font-bold text-rose-800 mt-2">Cà Xòi • Đà Nẵng</span>
           </div>
         </div>
       </div>

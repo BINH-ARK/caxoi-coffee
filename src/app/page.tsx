@@ -30,9 +30,18 @@ import { useCart } from "@/context/CartContext";
 import ProductCard from "@/components/ProductCard";
 import ProductDetailModal from "@/components/ProductDetailModal";
 import CaXoiMenuBoard from "@/components/CaXoiMenuBoard";
+import WatermarkPattern from "@/components/WatermarkPattern";
 import { INITIAL_CATEGORIES, INITIAL_PRODUCTS, INITIAL_OPTIONS, INITIAL_SETTINGS } from "@/lib/store";
 import { getOperatingHoursStatus } from "@/lib/vietqr";
-import { formatVND, MIN_LY_ORDER, MIN_LY_MESSAGE } from "@/lib/utils";
+import {
+  formatVND,
+  MIN_LY_ORDER,
+  MIN_LY_MESSAGE,
+  FACEBOOK_FANPAGE_URL,
+  XANH_SM_ONELINK,
+  getQrImageSrc,
+  getTelHref,
+} from "@/lib/utils";
 
 export default function HomePage() {
   const router = useRouter();
@@ -254,124 +263,216 @@ export default function HomePage() {
 
   return (
     <div className="w-full">
-      {/* 1. HERO BANNER CÀ XÒI - FULL SCREEN */}
-      <section
-        style={{ backgroundColor: "#140A06" }}
-        className="relative w-full min-h-[calc(100vh-61px)] flex items-center overflow-hidden bg-coffee-950 bg-gradient-to-br from-[#140A06] via-[#23120B] to-[#3B1E13] text-white py-10 sm:py-14 lg:py-16 shadow-xl border-b border-pink-900/30"
-      >
-        {/* Cute watermark pattern */}
-        <div className="absolute inset-0 opacity-[0.04] pointer-events-none select-none text-[20px] sm:text-[24px] font-black tracking-widest text-pink-300 leading-relaxed overflow-hidden whitespace-nowrap">
-          {Array.from({ length: 20 }).map((_, i) => (
-            <div key={i} className="-ml-8">
-              CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI
-            </div>
-          ))}
-        </div>
+      {/* 1. HERO BANNER CÀ XÒI - LIGHT THEME 2/3 + 1/3 */}
+      <section className="relative w-full overflow-hidden bg-gradient-to-br from-[#FFFDF9] via-[#FFF4F8] to-[#FFE7F0] text-coffee-950 py-8 sm:py-12 lg:py-16 shadow-sm border-b border-pink-200/80">
+        {/* Cute seamless watermark pattern filling 100% width & height */}
+        {settings.heroWatermarkText && (
+          <WatermarkPattern
+            patternId="hero-caxoi-watermark"
+            text={settings.heroWatermarkText}
+            color="#9D174D"
+            opacity={0.045}
+            tileWidth={184}
+            tileHeight={72}
+            fontSize={22}
+            letterSpacing="0.1em"
+          />
+        )}
 
-        <div className="relative z-10 max-w-7xl mx-auto w-full px-4 sm:px-8 flex flex-col md:flex-row items-center justify-between gap-8 lg:gap-12">
-          <div className="max-w-2xl space-y-4 sm:space-y-5">
+        <div className="relative z-10 max-w-7xl mx-auto w-full px-4 sm:px-8 grid grid-cols-1 md:grid-cols-12 items-center gap-7 lg:gap-10">
+          {/* Left Content: 2/3 width (8/12) so copy flows smoothly without empty center gaps */}
+          <div className="md:col-span-8 w-full space-y-4 sm:space-y-5">
             {/* Tag / Location Pill */}
-            <div className="inline-flex flex-wrap items-center gap-2 px-3.5 py-1.5 rounded-full bg-pink-500/20 border border-pink-400/30 text-pink-200 text-xs sm:text-sm font-bold tracking-wide">
-              <span>🐾 Quán Cà Xòi</span>
-              <span className="text-pink-300">•</span>
-              <span className="flex items-center gap-1">
-                <MapPin className="w-3.5 h-3.5 text-pink-300" />
-                Hải Châu, Thanh Khê, Ngũ Hành Sơn, Đà Nẵng
-              </span>
+            <div className="inline-flex flex-wrap items-center gap-2 px-3.5 py-1.5 rounded-full bg-pink-100/90 border border-pink-300/70 text-rose-900 text-xs sm:text-sm font-bold tracking-wide shadow-sm">
+              <span>{settings.heroBadgeBrand}</span>
+              {settings.heroLocation && (
+                <>
+                  <span className="text-rose-400">•</span>
+                  <span className="flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5 text-rose-600" />
+                    {settings.heroLocation}
+                  </span>
+                </>
+              )}
             </div>
 
             {/* Official Slogan */}
-            <div className="space-y-1.5">
-              <span className="text-rose-400 font-extrabold text-sm sm:text-base lg:text-lg tracking-wide uppercase flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300" />
-                Trạm cấp cứu cơn buồn ngủ công sở ☕
-              </span>
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight leading-[1.12] text-white">
-                “Tỉnh như sáo, <br className="hidden sm:inline" />
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-300 via-rose-300 to-amber-300">
-                  báo như Xòi”
+            <div className="space-y-2">
+              {settings.heroEyebrow && (
+                <span className="text-rose-600 font-extrabold text-sm sm:text-base lg:text-lg tracking-wide uppercase flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-amber-500" />
+                  {settings.heroEyebrow}
+                </span>
+              )}
+              <h1 className="text-3xl sm:text-5xl xl:text-[3.4rem] font-black tracking-tight leading-[1.12] text-coffee-950">
+                {settings.heroHeadlinePrimary}{" "}
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600">
+                  {settings.heroHeadlineHighlight}
                 </span>
               </h1>
             </div>
 
-            <p className="text-sm sm:text-base lg:text-[17px] text-pink-100/90 leading-relaxed max-w-xl">
-              {'Giao siêu tốc Đà Nẵng - Gom đơn cả phòng, Cà Xòi bao giá! Cà phê cốt đậm đà, kem trứng muối, kem muối Huế thơm ngậy. Không sợ đá tan làm nhạt vị khi họp hành dở dang — cứ cất một chai vào túi hoặc tủ lạnh văn phòng, lúc nào "sập nguồn" thì rót ra nhâm nhi ngay.'}
-            </p>
+            {settings.heroDescription && (
+              <p className="text-sm sm:text-base lg:text-[17px] text-coffee-800 leading-relaxed w-full">
+                {settings.heroDescription}
+              </p>
+            )}
 
             {/* Service & Hotline highlight */}
-            <div className="flex flex-wrap items-center gap-2.5 pt-1 text-xs font-bold">
-              <span className="px-3 py-1.5 rounded-lg bg-pink-500/20 text-pink-200 border border-pink-400/30">
-                🛵 Xòi ship hoặc khách ghé lấy để gặp Xòi
-              </span>
+            <div className="flex flex-wrap items-center gap-2.5 pt-0.5 text-xs font-bold">
+              {settings.heroServiceNote && (
+                <span className="px-3.5 py-1.5 rounded-xl bg-rose-50 text-rose-800 border border-rose-200/80 shadow-sm">
+                  {settings.heroServiceNote}
+                </span>
+              )}
               <a
-                href="tel:0905249733"
-                className="px-3 py-1.5 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 border border-amber-300/40 transition-colors flex items-center gap-1.5"
+                href={getTelHref(settings.hotline)}
+                className="px-3.5 py-1.5 rounded-xl bg-amber-100/90 hover:bg-amber-200/80 text-amber-950 border border-amber-300/80 shadow-sm transition-colors flex items-center gap-1.5"
               >
-                <Phone className="w-3.5 h-3.5 text-amber-300" />
-                0905.249.733
+                <Phone className="w-3.5 h-3.5 text-amber-700" />
+                {settings.hotline}
               </a>
             </div>
 
             {/* Quick Pricing Highlights */}
-            <div className="flex flex-wrap items-center gap-2.5 pt-1 text-xs font-bold">
-              <span className="px-3 py-1.5 rounded-lg bg-white/10 text-pink-100 border border-white/10">
-                🥤 Ly: từ <span className="text-amber-300 font-extrabold">13.000đ</span>
-              </span>
-              <span className="px-3 py-1.5 rounded-lg bg-white/10 text-pink-100 border border-white/10">
-                🧴 Chai 100ml: từ <span className="text-amber-300 font-extrabold">25.000đ</span>
-              </span>
-              <span className="px-3 py-1.5 rounded-lg bg-white/10 text-pink-100 border border-white/10">
-                🍶 Chai 250ml: từ <span className="text-amber-300 font-extrabold">47.000đ</span>
-              </span>
+            <div className="flex flex-wrap items-center gap-2.5 text-xs font-bold">
+              {[settings.heroPriceBadge1, settings.heroPriceBadge2, settings.heroPriceBadge3]
+                .filter((b) => Boolean(b && b.trim()))
+                .map((badgeText, idx) => {
+                  const colonIdx = badgeText.indexOf(":");
+                  if (colonIdx !== -1 && colonIdx < badgeText.length - 1) {
+                    return (
+                      <span
+                        key={idx}
+                        className="px-3.5 py-1.5 rounded-xl bg-white/90 text-coffee-900 border border-pink-200/80 shadow-sm"
+                      >
+                        {badgeText.slice(0, colonIdx + 1)}{" "}
+                        <span className="text-rose-600 font-extrabold">
+                          {badgeText.slice(colonIdx + 1).trim()}
+                        </span>
+                      </span>
+                    );
+                  }
+                  return (
+                    <span
+                      key={idx}
+                      className="px-3.5 py-1.5 rounded-xl bg-white/90 text-coffee-900 border border-pink-200/80 shadow-sm"
+                    >
+                      {badgeText}
+                    </span>
+                  );
+                })}
             </div>
 
-            <div className="pt-3 flex flex-wrap items-center gap-3 sm:gap-4">
+            <div className="pt-2 flex flex-wrap items-center gap-3 sm:gap-4">
               <Link
                 href="/group-order"
-                className="inline-flex items-center gap-2 bg-gradient-to-r from-rose-500 to-amber-500 hover:from-rose-600 hover:to-amber-600 text-white font-bold text-xs sm:text-sm px-5 py-3 rounded-xl shadow-md transition-all active:scale-95"
+                className="inline-flex items-center gap-2 bg-gradient-to-r from-rose-500 to-amber-500 hover:from-rose-600 hover:to-amber-600 text-white font-bold text-xs sm:text-sm px-6 py-3 rounded-xl shadow-md shadow-rose-500/20 transition-all active:scale-95"
               >
                 <Users className="w-4 h-4" />
-                <span>Gom đơn cả phòng (Cà Xòi bao giá)</span>
+                <span>{settings.heroPrimaryCtaText || INITIAL_SETTINGS.heroPrimaryCtaText}</span>
               </Link>
 
               <a
                 href="#menu"
-                className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs sm:text-sm px-5 py-3 rounded-xl backdrop-blur-sm transition-all"
+                className="inline-flex items-center gap-1.5 bg-white hover:bg-pink-50 text-coffee-900 border border-coffee-200 font-bold text-xs sm:text-sm px-6 py-3 rounded-xl shadow-sm transition-all"
               >
-                <Coffee className="w-4 h-4 text-amber-300" />
-                <span>Xem Bảng Menu Cà Xòi</span>
+                <Coffee className="w-4 h-4 text-caramel" />
+                <span>{settings.heroSecondaryCtaText || INITIAL_SETTINGS.heroSecondaryCtaText}</span>
               </a>
             </div>
           </div>
 
-          {/* Right Official Logo & Mascot Card */}
-          <div className="relative shrink-0 flex flex-col items-center justify-center p-4 sm:p-5 bg-gradient-to-b from-pink-200/20 via-pink-300/10 to-transparent rounded-3xl border border-pink-300/20 shadow-inner">
-            <div className="w-48 sm:w-64 lg:w-72 h-48 sm:h-64 lg:h-72 rounded-2xl overflow-hidden border-2 border-pink-300/60 shadow-2xl bg-[#FFD1E3] relative mb-3 group">
+          {/* Right Official Logo & Dual QR Card: 1/3 width (4/12) */}
+          <div className="md:col-span-4 relative flex flex-col items-center justify-center p-4 sm:p-5 bg-white/80 backdrop-blur-md rounded-3xl border border-pink-200/90 shadow-xl shadow-pink-200/35 w-full max-w-[348px] mx-auto md:ml-auto md:mr-0">
+            <div className="w-full max-w-[290px] aspect-square rounded-2xl overflow-hidden border-2 border-pink-300/70 shadow-lg bg-[#FFD1E3] relative mb-3 group">
               <Image
-                src="/images/ca-xoi-logo.jpg"
+                src={settings.heroLogoUrl || "/images/ca-xoi-logo.jpg"}
                 alt="Logo Quán Cà Xòi"
                 fill
+                unoptimized
                 className="object-cover group-hover:scale-105 transition-transform duration-300"
                 priority
               />
             </div>
             <div className="text-center space-y-1">
-              <span className="inline-block bg-white text-coffee-950 font-black text-xs sm:text-sm px-3.5 py-1 rounded-full shadow-md">
-                🐾 Mèo Xòi & Trái Xoài 🥭
-              </span>
-              <p className="text-[11px] sm:text-xs text-pink-200 font-semibold">
-                Quán cà phê Internet • Đà Nẵng
-              </p>
+              {settings.heroMascotTitle && (
+                <span className="inline-block bg-pink-100 text-coffee-950 border border-pink-200/80 font-black text-xs sm:text-sm px-3.5 py-1 rounded-full shadow-sm">
+                  {settings.heroMascotTitle}
+                </span>
+              )}
+              {settings.heroMascotSubtitle && (
+                <p className="text-[11px] sm:text-xs text-coffee-600 font-semibold">
+                  {settings.heroMascotSubtitle}
+                </p>
+              )}
+            </div>
+
+            {/* Dual QR Codes: Facebook Fanpage + Xòi chạy Xanh SM */}
+            <div className="w-full max-w-[290px] grid grid-cols-2 gap-2.5 mt-3">
+              <a
+                href={settings.facebookUrl || FACEBOOK_FANPAGE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group bg-pink-50/75 hover:bg-blue-50/90 border border-pink-200/85 hover:border-blue-300 rounded-2xl p-2 flex flex-col items-center gap-1.5 transition-all hover:scale-[1.03] active:scale-95 shadow-sm"
+                title="Quét mã hoặc nhấn để mở Fanpage Facebook Cà Xòi"
+              >
+                <div className="w-full aspect-square bg-white rounded-xl p-2 flex items-center justify-center shadow-inner border border-pink-100">
+                  <Image
+                    src={getQrImageSrc(settings.facebookUrl, "facebook")}
+                    alt={settings.qrFacebookTitle || "QR Fanpage Facebook Cà Xòi"}
+                    width={120}
+                    height={120}
+                    unoptimized
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+                <div className="text-center leading-tight">
+                  <span className="block text-[10px] sm:text-[11px] font-black text-coffee-950 group-hover:text-blue-700">
+                    {settings.qrFacebookTitle || INITIAL_SETTINGS.qrFacebookTitle}
+                  </span>
+                  <span className="block text-[9px] font-semibold text-coffee-600">
+                    {settings.qrFacebookSubtitle || INITIAL_SETTINGS.qrFacebookSubtitle}
+                  </span>
+                </div>
+              </a>
+
+              <a
+                href={settings.xanhSmUrl || XANH_SM_ONELINK}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group bg-emerald-50/85 hover:bg-emerald-100/90 border border-emerald-200 hover:border-emerald-400 rounded-2xl p-2 flex flex-col items-center gap-1.5 transition-all hover:scale-[1.03] active:scale-95 shadow-sm"
+                title="Quét mã hoặc nhấn để đặt Cà Xòi qua Xanh SM Ngon"
+              >
+                <div className="w-full aspect-square bg-white rounded-xl p-2 flex items-center justify-center shadow-inner border border-emerald-100">
+                  <Image
+                    src={getQrImageSrc(settings.xanhSmUrl, "xanhsm")}
+                    alt={settings.qrXanhSmTitle || "QR Xòi chạy Xanh SM"}
+                    width={120}
+                    height={120}
+                    unoptimized
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+                <div className="text-center leading-tight">
+                  <span className="block text-[10px] sm:text-[11px] font-black text-emerald-950 group-hover:text-emerald-700">
+                    {settings.qrXanhSmTitle || INITIAL_SETTINGS.qrXanhSmTitle}
+                  </span>
+                  <span className="block text-[9px] font-semibold text-emerald-700">
+                    {settings.qrXanhSmSubtitle || INITIAL_SETTINGS.qrXanhSmSubtitle}
+                  </span>
+                </div>
+              </a>
             </div>
           </div>
         </div>
 
-        {/* Decorative background elements */}
-        <div className="absolute -right-16 -bottom-16 w-96 h-96 rounded-full bg-pink-500/10 blur-3xl pointer-events-none" />
-        <div className="absolute -left-20 -top-20 w-80 h-80 rounded-full bg-amber-500/5 blur-3xl pointer-events-none" />
+        {/* Soft pastel ambient glows */}
+        <div className="absolute -right-16 -bottom-16 w-96 h-96 rounded-full bg-pink-300/20 blur-3xl pointer-events-none" />
+        <div className="absolute -left-20 -top-20 w-80 h-80 rounded-full bg-amber-200/25 blur-3xl pointer-events-none" />
       </section>
 
-      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-6 pb-4 space-y-6">
         {/* 2. OPERATIONAL STATUS & VOUCHERS BAR */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {/* Status card */}
@@ -604,11 +705,12 @@ export default function HomePage() {
           </div>
         )}
       </div>
+      </div>
 
-      {/* 4. MENU SECTION ANCHOR */}
-      <section id="menu" className="space-y-4 pt-2">
+      {/* 4. MENU SECTION ANCHOR - FULL SCREEN WIDTH */}
+      <section id="menu" className="w-full pt-2">
         {/* Search & Tag Chips */}
-        <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 pb-3 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
           {/* Search Bar */}
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 text-coffee-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -671,7 +773,8 @@ export default function HomePage() {
         </div>
 
         {/* Horizontal Category Sticky Chips & View Switcher */}
-        <div className="sticky top-[61px] z-30 bg-cream/95 backdrop-blur-md py-2 -mx-4 px-4 border-b border-coffee-100 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+        <div className="sticky top-[61px] z-30 bg-cream/95 backdrop-blur-md py-2 border-y border-coffee-100">
+          <div className="max-w-7xl mx-auto px-4 sm:px-8 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
@@ -747,14 +850,16 @@ export default function HomePage() {
             </button>
           </div>
         </div>
+        </div>
 
         {/* CÀ XÒI OFFICIAL MENU BOARD or PRODUCT GRID */}
         {menuViewMode === "BOARD" ? (
-          <div className="space-y-4">
+          <div className="w-full">
             <CaXoiMenuBoard
               products={products}
               activeCategoryId={activeCategoryId}
               searchQuery={searchQuery}
+              xanhSmUrl={settings.xanhSmUrl}
               onSelectProductVariant={(product, variantName) => {
                 setSelectedVariantName(variantName);
                 setSelectedProduct(product);
@@ -762,33 +867,36 @@ export default function HomePage() {
             />
 
             {/* Switch to Grid Prompt Banner */}
-            <div className="bg-white rounded-2xl p-4 border border-coffee-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-caramel/10 border border-caramel/20 flex items-center justify-center text-caramel shrink-0">
-                  <LayoutGrid className="w-5 h-5" />
+            <div className="max-w-7xl mx-auto px-4 sm:px-8 pt-4 pb-8">
+              <div className="bg-white rounded-2xl p-4 border border-coffee-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-caramel/10 border border-caramel/20 flex items-center justify-center text-caramel shrink-0">
+                    <LayoutGrid className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-coffee-900">
+                      Khám phá toàn bộ {products.length} món với hình ảnh thực tế
+                    </h4>
+                    <p className="text-[11px] text-coffee-500">
+                      Xem chi tiết mô tả thành phần, mức đường/đá và topping của từng món
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h4 className="text-xs font-bold text-coffee-900">
-                    Khám phá toàn bộ {products.length} món với hình ảnh thực tế
-                  </h4>
-                  <p className="text-[11px] text-coffee-500">
-                    Xem chi tiết mô tả thành phần, mức đường/đá và topping của từng món
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setMenuViewMode("GRID")}
+                  className="px-4 py-2 bg-coffee-800 text-white rounded-xl text-xs font-bold hover:bg-coffee-900 transition-all flex items-center gap-1.5 shadow-sm shrink-0"
+                >
+                  <span>Xem Lưới Thẻ Món</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setMenuViewMode("GRID")}
-                className="px-4 py-2 bg-coffee-800 text-white rounded-xl text-xs font-bold hover:bg-coffee-900 transition-all flex items-center gap-1.5 shadow-sm shrink-0"
-              >
-                <span>Xem Lưới Thẻ Món</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
             </div>
           </div>
         ) : (
           /* Product Grid */
-          filteredProducts.length === 0 ? (
+          <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6">
+          {filteredProducts.length === 0 ? (
             <div className="bg-white rounded-3xl p-12 text-center border border-coffee-100 space-y-3">
               <AlertCircle className="w-10 h-10 text-coffee-400 mx-auto" />
               <h3 className="text-base font-bold text-coffee-800">Không tìm thấy món phù hợp</h3>
@@ -835,10 +943,10 @@ export default function HomePage() {
                 ))}
               </div>
             </div>
-          )
+          )}
+          </div>
         )}
       </section>
-      </div>
 
       {/* 5-Ly Minimum Toast Notification */}
       {Boolean(lyToastMsg) && (

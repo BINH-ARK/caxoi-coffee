@@ -7,7 +7,7 @@ import CustomerFooter from "@/components/CustomerFooter";
 import XanhSmFloatingButton from "@/components/XanhSmFloatingButton";
 
 export const metadata: Metadata = {
-  title: "Cà Xòi - Trạm Cấp Cứu Cơn Buồn Ngủ Công Sở | Đà Nẵng",
+  title: "Cà Xòi • Trạm Cấp Cứu Cơn Buồn Ngủ Công Sở | Đà Nẵng",
   description: "Cà Xòi: Tỉnh như sáo, báo như Xòi! Trạm cấp cứu cơn buồn ngủ công sở, giao siêu tốc Hải Châu, Thanh Khê, Ngũ Hành Sơn, Đà Nẵng. Hotline: 0905 249 733.",
 };
 

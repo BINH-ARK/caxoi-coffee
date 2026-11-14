@@ -147,6 +147,29 @@ export interface BusinessSettings {
   vietqrBankId: string;
   vietqrAccountNo: string;
   vietqrAccountName: string;
+  // Nội dung & thông tin Hero Banner (Hình 1) có thể chỉnh sửa từ Admin
+  heroBadgeBrand: string;
+  heroLocation: string;
+  heroEyebrow: string;
+  heroHeadlinePrimary: string;
+  heroHeadlineHighlight: string;
+  heroDescription: string;
+  heroServiceNote: string;
+  heroPriceBadge1: string;
+  heroPriceBadge2: string;
+  heroPriceBadge3: string;
+  heroPrimaryCtaText: string;
+  heroSecondaryCtaText: string;
+  heroWatermarkText: string;
+  heroLogoUrl: string;
+  heroMascotTitle: string;
+  heroMascotSubtitle: string;
+  facebookUrl: string;
+  qrFacebookTitle: string;
+  qrFacebookSubtitle: string;
+  xanhSmUrl: string;
+  qrXanhSmTitle: string;
+  qrXanhSmSubtitle: string;
 }
 
 export interface PermissionDefinition {

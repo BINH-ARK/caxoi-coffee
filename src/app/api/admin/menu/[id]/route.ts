@@ -5,6 +5,7 @@ import {
   deleteProductFromSqlite,
 } from "@/lib/sqlite";
 import { updateProductInMySql } from "@/lib/mysql";
+import { parseProductTags } from "@/lib/utils";
 
 export async function PATCH(
   request: Request,
@@ -35,7 +36,7 @@ export async function PATCH(
       isAvailable: body.isAvailable !== undefined ? Boolean(body.isAvailable) : currentProduct.isAvailable,
       isFeatured: body.isFeatured !== undefined ? Boolean(body.isFeatured) : currentProduct.isFeatured,
       prepTimeMinutes: body.prepTimeMinutes !== undefined ? Number(body.prepTimeMinutes) : currentProduct.prepTimeMinutes,
-      tags: body.tags !== undefined ? body.tags : currentProduct.tags,
+      tags: body.tags !== undefined ? parseProductTags(body.tags) : currentProduct.tags,
       variants: body.variants !== undefined ? body.variants : currentProduct.variants,
     };
 

@@ -33,6 +33,7 @@ import {
   getOperatingHoursStatus,
   VietQrTemplate,
 } from "@/lib/vietqr";
+import HeroBannerSettingsCard from "@/components/admin/HeroBannerSettingsCard";
 
 interface OperatingAndVietQrSettingsProps {
   initialSettings: BusinessSettings;
@@ -134,7 +135,7 @@ export default function OperatingAndVietQrSettings({
 
       setSaveSuccess(true);
       onSettingsUpdated(data.data);
-      onShowMessage("✅ Đã lưu cấu hình vận hành và cổng thanh toán VietQR thành công!");
+      onShowMessage("✅ Đã lưu cấu hình quán, VietQR và nội dung Trang chủ thành công!");
       setTimeout(() => setSaveSuccess(false), 3500);
     } catch (err: any) {
       setSaveError(err.message || "Có lỗi xảy ra khi lưu");
@@ -257,17 +258,25 @@ export default function OperatingAndVietQrSettings({
             </div>
             <div>
               <h2 className="text-lg font-bold text-coffee-900 leading-tight">
-                Cấu hình Vận hành & Cổng Thanh toán VietQR
+                Cấu hình Vận hành, VietQR &amp; Nội dung Trang chủ
               </h2>
               <p className="text-xs text-coffee-500 mt-0.5">
-                Chỉnh sửa thông tin quán, giờ mở cửa/đóng cửa và tự động tạo mã VietQR thật chuẩn Napas 247.
+                Chỉnh sửa thông tin quán, giờ mở cửa, VietQR Napas 247 và toàn bộ nội dung / QR Hình 1 trên trang chủ.
               </p>
             </div>
           </div>
         </div>
 
         {/* Global Save Button */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <a
+            href="#hero-content-editor"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-rose-700 bg-pink-50 hover:bg-pink-100 rounded-xl transition-all border border-pink-200"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-rose-600" />
+            <span>Sửa Nội dung Hình 1</span>
+          </a>
+
           <button
             type="button"
             onClick={() => setFormData({ ...initialSettings })}
@@ -865,6 +874,20 @@ export default function OperatingAndVietQrSettings({
           </div>
         </div>
       </div>
+
+      {/* SECTION 4: HERO BANNER CONTENT & DUAL QR EDITOR (HÌNH 1) */}
+      <HeroBannerSettingsCard
+        formData={formData}
+        isSaving={isSaving}
+        onChange={(field, value) => handleInputChange(field, value)}
+        onSave={() => handleSaveSettings()}
+        onResetHeroDefaults={(defaults) =>
+          setFormData((prev) => ({
+            ...prev,
+            ...defaults,
+          }))
+        }
+      />
     </div>
   );
 }

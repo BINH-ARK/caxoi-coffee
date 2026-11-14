@@ -6,12 +6,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Coffee, ShoppingBag, Users, Sparkles, Phone, Truck } from "lucide-react";
 import { useCart } from "@/context/CartContext";
-import { formatVND } from "@/lib/utils";
+import { formatVND, XANH_SM_ONELINK, getTelHref } from "@/lib/utils";
+import { useBusinessSettings } from "@/lib/useBusinessSettings";
 import CustomerOrderLookupModal from "@/components/CustomerOrderLookupModal";
 
 export default function Header() {
   const pathname = usePathname();
   const { totalItems, totalPrice } = useCart();
+  const settings = useBusinessSettings();
   const [isLookupOpen, setIsLookupOpen] = useState(false);
 
   // Hide customer header on staff management routes
@@ -27,10 +29,11 @@ export default function Header() {
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="w-11 h-11 rounded-2xl border border-pink-200 overflow-hidden shadow-sm group-hover:scale-105 transition-transform bg-[#FFD1E3] flex items-center justify-center relative">
               <Image
-                src="/images/ca-xoi-logo.jpg"
+                src={settings.heroLogoUrl || "/images/ca-xoi-logo.jpg"}
                 alt="Logo Cà Xòi"
                 width={44}
                 height={44}
+                unoptimized
                 className="w-full h-full object-cover"
                 priority
               />
@@ -46,7 +49,7 @@ export default function Header() {
                 </span>
               </div>
               <p className="text-[11px] text-rose-700 font-bold leading-tight mt-0.5">
-                Tỉnh như sáo, báo như Xòi ☕
+                {`${settings.heroHeadlinePrimary} ${settings.heroHeadlineHighlight}`.replace(/[“”"]/g, "")} ☕
               </p>
             </div>
           </Link>
@@ -83,7 +86,7 @@ export default function Header() {
 
             {/* Xanh SM Ngon Direct Link */}
             <a
-              href="https://xanhsmngon.onelink.me/14WJ/u8vplbn5"
+              href={settings.xanhSmUrl || XANH_SM_ONELINK}
               target="_blank"
               rel="noopener noreferrer"
               className="hidden sm:inline-flex items-center gap-1.5 text-xs font-bold bg-[#008F5D] hover:bg-[#00764D] text-white px-3 py-1.5 rounded-xl border border-emerald-400/50 shadow-sm transition-all hover:scale-105 active:scale-95"
@@ -95,12 +98,12 @@ export default function Header() {
 
             {/* Hotline Quick Call */}
             <a
-              href="tel:0905249733"
+              href={getTelHref(settings.hotline)}
               className="hidden md:flex items-center gap-1.5 text-xs font-bold text-coffee-800 bg-pink-50 hover:bg-pink-100 border border-pink-200 px-3 py-2 rounded-xl transition-colors"
-              title="Hotline Cà Xòi: 0905 249 733"
+              title={`Hotline Cà Xòi: ${settings.hotline}`}
             >
               <Phone className="w-3.5 h-3.5 text-rose-600" />
-              <span>0905.249.733</span>
+              <span>{settings.hotline}</span>
             </a>
 
             {/* Cart Quick Button */}

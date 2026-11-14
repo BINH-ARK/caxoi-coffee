@@ -46,6 +46,9 @@ export const POPULAR_BUILDINGS = [
 export const MIN_LY_ORDER = 5;
 export const MIN_LY_MESSAGE = "🐾 Thêm vài món cho đủ 5 ly để Xòi mở cổng thanh toán nhé!";
 
+export const FACEBOOK_FANPAGE_URL = "https://www.facebook.com/caxoi2022?locale=vi_VN";
+export const XANH_SM_ONELINK = "https://xanhsmngon.onelink.me/14WJ/5hxil4ex";
+
 interface LyCountableItem {
   variant?: { sizeName?: string };
   variantName?: string;
@@ -77,3 +80,44 @@ export function getMinLyValidationError(items: LyCountableItem[]): string | null
   return null;
 }
 
+/**
+ * Chuẩn hóa số điện thoại thành đường dẫn tel: an toàn.
+ */
+export function getTelHref(hotline?: string | null): string {
+  const digits = (hotline || "").replace(/[^\d+]/g, "");
+  return `tel:${digits || "0905249733"}`;
+}
+
+/**
+ * Trả về đường dẫn ảnh QR tĩnh mặc định hoặc API /api/qr động nếu Admin đổi URL.
+ */
+export function getQrImageSrc(targetUrl: string | undefined | null, kind: "facebook" | "xanhsm"): string {
+  const normalized = (targetUrl || "").trim();
+  if (kind === "facebook") {
+    if (!normalized || normalized === FACEBOOK_FANPAGE_URL) {
+      return "/images/qr-facebook.svg";
+    }
+    return `/api/qr?color=140A06&url=${encodeURIComponent(normalized)}`;
+  }
+
+  if (!normalized || normalized === XANH_SM_ONELINK) {
+    return "/images/qr-xanhsm.svg";
+  }
+  return `/api/qr?color=005C3B&url=${encodeURIComponent(normalized)}`;
+}
+
+/**
+ * Phân tích chuỗi/mảng tag sản phẩm, giữ nguyên mảng rỗng [] khi Admin tắt hết tag.
+ */
+export function parseProductTags(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((t) => String(t).trim()).filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    return raw
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+  }
+  return [];
+}

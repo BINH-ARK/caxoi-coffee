@@ -258,7 +258,7 @@ export default function AdminManagementHeader({
               }`}
             >
               <Settings className="w-4 h-4 text-stone-300" />
-              <span>Vận hành & Ngân hàng</span>
+              <span>Cài đặt Quán & Trang chủ</span>
             </button>
 
             {/* 7. SAO LƯU & CSDL */}

@@ -1,5 +1,6 @@
 import mysql from "mysql2/promise";
 import { Product, Order, Category, BusinessSettings } from "@/types";
+import { parseProductTags } from "@/lib/utils";
 
 export interface DatabaseStatus {
   connected: boolean;
@@ -153,12 +154,7 @@ export async function getProductsFromMySql(): Promise<Product[] | null> {
           isDefault: Boolean(v.is_default),
         }));
 
-      let tags: string[] = ["BEST_SELLER"];
-      if (r.tags) {
-        try {
-          tags = typeof r.tags === "string" ? r.tags.split(",") : r.tags;
-        } catch {}
-      }
+      const tags = parseProductTags(r.tags);
 
       return {
         id: r.id,
@@ -194,9 +190,10 @@ export async function getProductsFromMySql(): Promise<Product[] | null> {
 export async function updateProductInMySql(product: Product): Promise<boolean> {
   try {
     const pool = getMySqlPool();
+    const serializedTags = Array.isArray(product.tags) ? product.tags.join(",") : "";
     await pool.query(
       `UPDATE products 
-       SET name = ?, description = ?, base_price = ?, sale_price = ?, is_available = ?, is_featured = ?
+       SET name = ?, description = ?, base_price = ?, sale_price = ?, is_available = ?, is_featured = ?, image_url = ?, category_id = ?, prep_time_minutes = ?, tags = ?
        WHERE id = ?`,
       [
         product.name,
@@ -205,6 +202,10 @@ export async function updateProductInMySql(product: Product): Promise<boolean> {
         product.salePrice,
         product.isAvailable ? 1 : 0,
         product.isFeatured ? 1 : 0,
+        product.imageUrl || "",
+        product.categoryId || 1,
+        product.prepTimeMinutes || 4,
+        serializedTags,
         product.id,
       ]
     );

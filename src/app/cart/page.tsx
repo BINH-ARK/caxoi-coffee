@@ -22,7 +22,13 @@ import {
   Truck,
 } from "lucide-react";
 import { useCart } from "@/context/CartContext";
-import { formatVND, POPULAR_BUILDINGS, MIN_LY_ORDER, getMinLyValidationError } from "@/lib/utils";
+import {
+  formatVND,
+  POPULAR_BUILDINGS,
+  MIN_LY_ORDER,
+  getMinLyValidationError,
+  XANH_SM_ONELINK,
+} from "@/lib/utils";
 import { OrderType, PaymentMethod } from "@/types";
 
 export default function CartCheckoutPage() {
@@ -457,7 +463,7 @@ export default function CartCheckoutPage() {
                 Thông tin đặt hàng
               </h2>
               <a
-                href="https://xanhsmngon.onelink.me/14WJ/u8vplbn5"
+                href={XANH_SM_ONELINK}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#008F5D] hover:text-[#00764D] bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 px-2.5 py-1 rounded-full transition-all"
@@ -787,7 +793,7 @@ export default function CartCheckoutPage() {
                 </div>
 
                 <a
-                  href="https://xanhsmngon.onelink.me/14WJ/u8vplbn5"
+                  href={XANH_SM_ONELINK}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full inline-flex items-center justify-center gap-2 bg-[#008F5D] hover:bg-[#00764D] text-white font-black text-xs py-2.5 px-4 rounded-xl transition-all shadow-md hover:scale-[1.01] active:scale-95"

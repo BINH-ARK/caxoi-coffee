@@ -278,6 +278,102 @@ export default function AdminPage() {
     }
   };
 
+  const PRODUCT_TAG_OPTIONS: ReadonlyArray<{
+    key: string;
+    label: string;
+    emoji: string;
+    activeClass: string;
+    inactiveClass: string;
+  }> = [
+    {
+      key: "BEST_SELLER",
+      label: "Best Seller",
+      emoji: "🔥",
+      activeClass: "bg-orange-500 text-white border-orange-500 shadow-sm",
+      inactiveClass: "bg-white text-orange-700 border-orange-200 hover:bg-orange-50",
+    },
+    {
+      key: "NEW",
+      label: "Mới",
+      emoji: "✨",
+      activeClass: "bg-rose-500 text-white border-rose-500 shadow-sm",
+      inactiveClass: "bg-white text-rose-700 border-rose-200 hover:bg-rose-50",
+    },
+    {
+      key: "OFFICE_COMBO",
+      label: "Combo Văn Phòng",
+      emoji: "🏢",
+      activeClass: "bg-amber-600 text-white border-amber-600 shadow-sm",
+      inactiveClass: "bg-white text-amber-800 border-amber-200 hover:bg-amber-50",
+    },
+    {
+      key: "SIGNATURE",
+      label: "Signature",
+      emoji: "⭐",
+      activeClass: "bg-coffee-800 text-white border-coffee-800 shadow-sm",
+      inactiveClass: "bg-white text-coffee-700 border-coffee-200 hover:bg-coffee-50",
+    },
+  ];
+
+  // Quick 1-click tag toggle (e.g., BEST_SELLER, NEW) directly in table or modal
+  const handleToggleProductTag = async (product: Product, tagKey: string) => {
+    const hasTag = product.tags.includes(tagKey);
+    const updatedTags = hasTag
+      ? product.tags.filter((t) => t !== tagKey)
+      : [...product.tags, tagKey];
+    const tagLabel = PRODUCT_TAG_OPTIONS.find((t) => t.key === tagKey)?.label || tagKey;
+
+    try {
+      const res = await fetch(`/api/admin/menu/${product.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tags: updatedTags }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setProducts((prev) =>
+          prev.map((item) => (item.id === product.id ? { ...item, tags: updatedTags } : item))
+        );
+        setActionMsg(
+          `Đã ${hasTag ? "gỡ" : "gắn"} nhãn "${tagLabel}" cho món "${product.name}"!`
+        );
+        notifyMenuUpdated();
+        setTimeout(() => setActionMsg(""), 3000);
+      } else {
+        alert(data.message || "Không thể cập nhật nhãn món.");
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Quick 1-click Featured toggle in table
+  const handleToggleFeatured = async (product: Product) => {
+    const nextFeatured = !product.isFeatured;
+    try {
+      const res = await fetch(`/api/admin/menu/${product.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isFeatured: nextFeatured }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setProducts((prev) =>
+          prev.map((item) =>
+            item.id === product.id ? { ...item, isFeatured: nextFeatured } : item
+          )
+        );
+        setActionMsg(
+          `Đã ${nextFeatured ? "bật" : "tắt"} trạng thái Nổi bật cho "${product.name}"!`
+        );
+        notifyMenuUpdated();
+        setTimeout(() => setActionMsg(""), 3000);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   // Open Edit Modal for a specific product
   const handleOpenEditProduct = (product: Product) => {
     setEditingProductId(product.id);
@@ -1111,16 +1207,56 @@ export default function AdminPage() {
                               <div>
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <span className="font-bold text-sm text-coffee-900">{p.name}</span>
-                                  {p.isFeatured && (
-                                    <span className="bg-amber-100 text-amber-800 text-[9px] font-bold px-1.5 py-0.5 rounded">
-                                      Nổi bật
-                                    </span>
-                                  )}
-                                  {p.tags.includes("BEST_SELLER") && (
-                                    <span className="bg-orange-100 text-orange-800 text-[9px] font-bold px-1.5 py-0.5 rounded">
-                                      Best Seller
-                                    </span>
-                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleProductTag(p, "BEST_SELLER")}
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all active:scale-95 ${
+                                      p.tags.includes("BEST_SELLER")
+                                        ? "bg-orange-500 text-white border-orange-500 shadow-xs hover:bg-orange-600"
+                                        : "bg-orange-50/70 text-orange-600 border-dashed border-orange-300 hover:bg-orange-100"
+                                    }`}
+                                    title={
+                                      p.tags.includes("BEST_SELLER")
+                                        ? "Nhấn để gỡ nhãn Best Seller"
+                                        : "Nhấn để gắn nhãn Best Seller"
+                                    }
+                                  >
+                                    {p.tags.includes("BEST_SELLER") ? "🔥 Best Seller" : "+ Best Seller"}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleProductTag(p, "NEW")}
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all active:scale-95 ${
+                                      p.tags.includes("NEW")
+                                        ? "bg-rose-500 text-white border-rose-500 shadow-xs hover:bg-rose-600"
+                                        : "bg-rose-50/60 text-rose-500 border-dashed border-rose-200 hover:bg-rose-100"
+                                    }`}
+                                    title={
+                                      p.tags.includes("NEW")
+                                        ? "Nhấn để gỡ nhãn Mới"
+                                        : "Nhấn để gắn nhãn Mới"
+                                    }
+                                  >
+                                    {p.tags.includes("NEW") ? "✨ Mới" : "+ Mới"}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleFeatured(p)}
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all active:scale-95 ${
+                                      p.isFeatured
+                                        ? "bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200"
+                                        : "bg-white text-coffee-400 border-dashed border-coffee-200 hover:bg-amber-50 hover:text-amber-700"
+                                    }`}
+                                    title={
+                                      p.isFeatured
+                                        ? "Nhấn để tắt Nổi bật trang chủ"
+                                        : "Nhấn để bật Nổi bật trang chủ"
+                                    }
+                                  >
+                                    {p.isFeatured ? "★ Nổi bật" : "☆ Nổi bật"}
+                                  </button>
                                 </div>
                                 <div className="text-[11px] text-coffee-500 line-clamp-1 mt-0.5">
                                   {p.description}
@@ -2117,7 +2253,10 @@ export default function AdminPage() {
         <div className="animate-fade-in">
           <OperatingAndVietQrSettings
             initialSettings={settings}
-            onSettingsUpdated={(updated) => setSettings(updated)}
+            onSettingsUpdated={(updated) => {
+              setSettings(updated);
+              notifyMenuUpdated();
+            }}
             onShowMessage={(msg) => {
               setActionMsg(msg);
               setTimeout(() => setActionMsg(""), 3500);
@@ -2384,6 +2523,44 @@ export default function AdminPage() {
                     />
                     <div className="w-9 h-5 bg-coffee-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-coffee-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-caramel"></div>
                   </label>
+                </div>
+
+                {/* Nhãn hiển thị (Best Seller, Mới, Combo, Signature) */}
+                <div className="pt-2 border-t border-amber-200/60 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-coffee-700">
+                      Nhãn hiển thị trên Bảng Menu (Tags):
+                    </span>
+                    <span className="text-[10px] text-coffee-500">
+                      Bật/tắt để hiện huy hiệu trên Menu
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {PRODUCT_TAG_OPTIONS.map((tagOpt) => {
+                      const active = productForm.tags.includes(tagOpt.key);
+                      return (
+                        <button
+                          key={tagOpt.key}
+                          type="button"
+                          onClick={() => {
+                            setProductForm((prev) => ({
+                              ...prev,
+                              tags: prev.tags.includes(tagOpt.key)
+                                ? prev.tags.filter((t) => t !== tagOpt.key)
+                                : [...prev.tags, tagOpt.key],
+                            }));
+                          }}
+                          className={`px-3 py-1.5 rounded-xl border text-[11px] font-bold transition-all active:scale-95 flex items-center gap-1.5 ${
+                            active ? tagOpt.activeClass : tagOpt.inactiveClass
+                          }`}
+                        >
+                          <span>{tagOpt.emoji}</span>
+                          <span>{tagOpt.label}</span>
+                          {active && <Check className="w-3 h-3" />}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 

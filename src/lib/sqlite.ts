@@ -16,6 +16,8 @@ import {
   Promotion,
   DiscountType,
 } from "@/types";
+import { INITIAL_SETTINGS } from "@/lib/store";
+import { parseProductTags } from "@/lib/utils";
 
 export interface SqliteStatus {
   connected: boolean;
@@ -161,6 +163,8 @@ export function getSqliteDb(): Database.Database {
     console.error("[SQLite Migration] Lỗi kiểm tra cột email:", err.message);
   }
 
+  ensureBusinessSettingsColumns(db);
+
   dbInstance = db;
   return dbInstance;
 }
@@ -304,10 +308,7 @@ export function getProductsFromSqlite(): Product[] {
           isDefault: Boolean(v.is_default),
         }));
 
-      let tags: string[] = ["BEST_SELLER"];
-      if (r.tags) {
-        tags = typeof r.tags === "string" ? r.tags.split(",") : r.tags;
-      }
+      const tags = parseProductTags(r.tags);
 
       return {
         id: r.id,
@@ -378,9 +379,10 @@ export function createProductInSqlite(product: Product): boolean {
 export function updateProductInSqlite(product: Product): boolean {
   try {
     const db = getSqliteDb();
+    const serializedTags = Array.isArray(product.tags) ? product.tags.join(",") : "";
     const stmt = db.prepare(`
       UPDATE products 
-      SET name = ?, description = ?, base_price = ?, sale_price = ?, is_available = ?, is_featured = ?, image_url = ?, category_id = ?, prep_time_minutes = ?
+      SET name = ?, description = ?, base_price = ?, sale_price = ?, is_available = ?, is_featured = ?, image_url = ?, category_id = ?, prep_time_minutes = ?, tags = ?
       WHERE id = ?
     `);
 
@@ -394,6 +396,7 @@ export function updateProductInSqlite(product: Product): boolean {
       product.imageUrl || "",
       product.categoryId || 1,
       product.prepTimeMinutes || 4,
+      serializedTags,
       product.id
     );
 
@@ -571,89 +574,120 @@ export function deleteOptionValueInSqlite(id: number): boolean {
 // ============================================================================
 // 4. CẤU HÌNH VẬN HÀNH & VIETQR (BUSINESS SETTINGS)
 // ============================================================================
+const HERO_SETTINGS_COLUMNS: ReadonlyArray<{
+  key: keyof BusinessSettings;
+  col: string;
+  required?: boolean;
+}> = [
+  { key: "heroBadgeBrand", col: "hero_badge_brand", required: true },
+  { key: "heroLocation", col: "hero_location" },
+  { key: "heroEyebrow", col: "hero_eyebrow" },
+  { key: "heroHeadlinePrimary", col: "hero_headline_primary" },
+  { key: "heroHeadlineHighlight", col: "hero_headline_highlight" },
+  { key: "heroDescription", col: "hero_description" },
+  { key: "heroServiceNote", col: "hero_service_note" },
+  { key: "heroPriceBadge1", col: "hero_price_badge_1" },
+  { key: "heroPriceBadge2", col: "hero_price_badge_2" },
+  { key: "heroPriceBadge3", col: "hero_price_badge_3" },
+  { key: "heroPrimaryCtaText", col: "hero_primary_cta_text" },
+  { key: "heroSecondaryCtaText", col: "hero_secondary_cta_text" },
+  { key: "heroWatermarkText", col: "hero_watermark_text" },
+  { key: "heroLogoUrl", col: "hero_logo_url", required: true },
+  { key: "heroMascotTitle", col: "hero_mascot_title" },
+  { key: "heroMascotSubtitle", col: "hero_mascot_subtitle" },
+  { key: "facebookUrl", col: "facebook_url", required: true },
+  { key: "qrFacebookTitle", col: "qr_facebook_title" },
+  { key: "qrFacebookSubtitle", col: "qr_facebook_subtitle" },
+  { key: "xanhSmUrl", col: "xanh_sm_url", required: true },
+  { key: "qrXanhSmTitle", col: "qr_xanh_sm_title" },
+  { key: "qrXanhSmSubtitle", col: "qr_xanh_sm_subtitle" },
+];
+
+export function ensureBusinessSettingsColumns(db: Database.Database) {
+  try {
+    const columns = (db.pragma("table_info(business_settings)") || []) as any[];
+    if (!Array.isArray(columns) || columns.length === 0) return;
+    const colNames = columns.map((c) => c.name);
+    for (const def of HERO_SETTINGS_COLUMNS) {
+      if (!colNames.includes(def.col)) {
+        db.exec(`ALTER TABLE business_settings ADD COLUMN ${def.col} TEXT DEFAULT NULL`);
+      }
+    }
+  } catch (err: any) {
+    console.error("[SQLite Migration] Lỗi kiểm tra cột business_settings:", err.message);
+  }
+}
+
 export function getBusinessSettingsFromSqlite(): BusinessSettings {
   try {
     checkAndAutoSyncSqlite();
     const db = getSqliteDb();
+    ensureBusinessSettingsColumns(db);
     const row: any = db.prepare("SELECT * FROM business_settings WHERE id = 1").get();
     if (!row) {
-      return {
-        storeName: "Cà Xòi - Trạm Cấp Cứu Cơn Buồn Ngủ Công Sở",
-        storeStatus: "OPEN",
-        storeStatusMessage: "Tỉnh như sáo, báo như Xòi • Giao siêu tốc Hải Châu, Thanh Khê, Ngũ Hành Sơn, Đà Nẵng",
-        hotline: "0905 249 733",
-        openTime: "06:30",
-        closeTime: "21:30",
-        baseDeliveryFee: 15000,
-        freeDeliveryMinCups: 3,
-        maxSlotCapacityCups: 30,
-        prepLeadTimeMinutes: 5,
-        vietqrBankId: "MB",
-        vietqrAccountNo: "999988886666",
-        vietqrAccountName: "CA XOI CAFE",
-      };
+      return { ...INITIAL_SETTINGS };
     }
 
-    return {
-      storeName: row.store_name || "Cà Xòi - Trạm Cấp Cứu Cơn Buồn Ngủ Công Sở",
-      storeStatus: (row.store_status as any) || "OPEN",
-      storeStatusMessage: row.store_status_message || row.rush_mode_message || "Tỉnh như sáo, báo như Xòi • Đà Nẵng",
-      hotline: row.hotline || row.phone || "0905 249 733",
-      openTime: row.open_time || "06:30",
-      closeTime: row.close_time || "21:30",
-      baseDeliveryFee: Number(row.base_delivery_fee || row.default_delivery_fee || 15000),
-      freeDeliveryMinCups: Number(row.free_delivery_min_cups || 3),
-      maxSlotCapacityCups: Number(row.max_slot_capacity_cups || row.max_orders_per_slot || 30),
-      prepLeadTimeMinutes: Number(row.prep_lead_time_minutes || 5),
-      vietqrBankId: row.vietqr_bank_id || row.bank_bin || "MB",
-      vietqrAccountNo: row.vietqr_account_no || row.bank_account_no || "999988886666",
-      vietqrAccountName: row.vietqr_account_name || row.bank_account_name || "CA XOI CAFE",
+    const result: BusinessSettings = {
+      ...INITIAL_SETTINGS,
+      storeName: row.store_name || INITIAL_SETTINGS.storeName,
+      storeStatus: (row.store_status as any) || INITIAL_SETTINGS.storeStatus,
+      storeStatusMessage:
+        row.store_status_message || row.rush_mode_message || INITIAL_SETTINGS.storeStatusMessage,
+      hotline: row.hotline || row.phone || INITIAL_SETTINGS.hotline,
+      openTime: row.open_time || INITIAL_SETTINGS.openTime,
+      closeTime: row.close_time || INITIAL_SETTINGS.closeTime,
+      baseDeliveryFee: Number(row.base_delivery_fee ?? row.default_delivery_fee ?? INITIAL_SETTINGS.baseDeliveryFee),
+      freeDeliveryMinCups: Number(row.free_delivery_min_cups ?? INITIAL_SETTINGS.freeDeliveryMinCups),
+      maxSlotCapacityCups: Number(row.max_slot_capacity_cups ?? row.max_orders_per_slot ?? INITIAL_SETTINGS.maxSlotCapacityCups),
+      prepLeadTimeMinutes: Number(row.prep_lead_time_minutes ?? INITIAL_SETTINGS.prepLeadTimeMinutes),
+      vietqrBankId: row.vietqr_bank_id || row.bank_bin || INITIAL_SETTINGS.vietqrBankId,
+      vietqrAccountNo: row.vietqr_account_no || row.bank_account_no || INITIAL_SETTINGS.vietqrAccountNo,
+      vietqrAccountName: row.vietqr_account_name || row.bank_account_name || INITIAL_SETTINGS.vietqrAccountName,
     };
+
+    for (const def of HERO_SETTINGS_COLUMNS) {
+      const rawVal = row[def.col];
+      const fallback = INITIAL_SETTINGS[def.key] as string;
+      if (def.required) {
+        (result as any)[def.key] = rawVal && String(rawVal).trim() ? String(rawVal) : fallback;
+      } else {
+        (result as any)[def.key] = rawVal === null || rawVal === undefined ? fallback : String(rawVal);
+      }
+    }
+
+    return result;
   } catch (error) {
-    return {
-      storeName: "Cà Xòi - Trạm Cấp Cứu Cơn Buồn Ngủ Công Sở",
-      storeStatus: "OPEN",
-      storeStatusMessage: "Tỉnh như sáo, báo như Xòi • Đà Nẵng",
-      hotline: "0905 249 733",
-      openTime: "06:30",
-      closeTime: "21:30",
-      baseDeliveryFee: 15000,
-      freeDeliveryMinCups: 3,
-      maxSlotCapacityCups: 30,
-      prepLeadTimeMinutes: 5,
-      vietqrBankId: "MB",
-      vietqrAccountNo: "999988886666",
-      vietqrAccountName: "CA XOI CAFE",
-    };
+    return { ...INITIAL_SETTINGS };
   }
 }
 
 export function updateBusinessSettingsInSqlite(updates: Partial<BusinessSettings>): BusinessSettings {
   try {
     const db = getSqliteDb();
+    ensureBusinessSettingsColumns(db);
     const current = getBusinessSettingsFromSqlite();
-    const merged = { ...current, ...updates };
+    const merged: BusinessSettings = { ...current, ...updates };
 
-    const stmt = db.prepare(`
-      UPDATE business_settings SET
-        store_name = ?,
-        store_status = ?,
-        store_status_message = ?,
-        hotline = ?,
-        phone = ?,
-        open_time = ?,
-        close_time = ?,
-        base_delivery_fee = ?,
-        free_delivery_min_cups = ?,
-        max_slot_capacity_cups = ?,
-        prep_lead_time_minutes = ?,
-        vietqr_bank_id = ?,
-        vietqr_account_no = ?,
-        vietqr_account_name = ?
-      WHERE id = 1
-    `);
+    const assignments = [
+      "store_name = ?",
+      "store_status = ?",
+      "store_status_message = ?",
+      "hotline = ?",
+      "phone = ?",
+      "open_time = ?",
+      "close_time = ?",
+      "base_delivery_fee = ?",
+      "free_delivery_min_cups = ?",
+      "max_slot_capacity_cups = ?",
+      "prep_lead_time_minutes = ?",
+      "vietqr_bank_id = ?",
+      "vietqr_account_no = ?",
+      "vietqr_account_name = ?",
+      ...HERO_SETTINGS_COLUMNS.map((d) => `${d.col} = ?`),
+    ];
 
-    stmt.run(
+    const values: any[] = [
       merged.storeName,
       merged.storeStatus,
       merged.storeStatusMessage,
@@ -667,8 +701,15 @@ export function updateBusinessSettingsInSqlite(updates: Partial<BusinessSettings
       merged.prepLeadTimeMinutes,
       merged.vietqrBankId,
       merged.vietqrAccountNo,
-      merged.vietqrAccountName
-    );
+      merged.vietqrAccountName,
+      ...HERO_SETTINGS_COLUMNS.map((d) => {
+        const val = merged[d.key];
+        return val === null || val === undefined ? INITIAL_SETTINGS[d.key] : String(val);
+      }),
+    ];
+
+    const stmt = db.prepare(`UPDATE business_settings SET ${assignments.join(", ")} WHERE id = 1`);
+    stmt.run(...values);
 
     syncMirrorFile();
     return merged;
