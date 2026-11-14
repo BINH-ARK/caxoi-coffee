@@ -330,7 +330,7 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
                       {isCompleted ? <CheckCircle2 className="w-4 h-4" /> : stepNum}
                     </div>
                     <span
-                      className={`text-[10px] sm:text-xs font-bold mt-1.5 line-clamp-1 ${
+                      className={`text-[10px] sm:text-xs font-bold mt-1.5 leading-tight ${
                         isCompleted
                           ? "text-coffee-900"
                           : isPendingPayment

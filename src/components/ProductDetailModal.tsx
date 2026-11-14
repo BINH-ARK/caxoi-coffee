@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import Image from "next/image";
 import { X, Plus, Minus, Check, Tag } from "lucide-react";
 import { Product, ProductVariant, ProductOption, CartItem, SelectedOptionItem } from "@/types";
-import { formatVND } from "@/lib/utils";
+import { formatVND, MIN_LY_ORDER, MIN_LY_MESSAGE } from "@/lib/utils";
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -13,6 +13,7 @@ interface ProductDetailModalProps {
   onAddToCart: (item: CartItem) => void;
   defaultRecipientLabel?: string;
   initialVariantName?: string;
+  existingLyCount?: number;
 }
 
 export default function ProductDetailModal({
@@ -22,6 +23,7 @@ export default function ProductDetailModal({
   onAddToCart,
   defaultRecipientLabel = "",
   initialVariantName,
+  existingLyCount = 0,
 }: ProductDetailModalProps) {
   if (!product) return null;
 
@@ -52,8 +54,15 @@ export default function ProductDetailModal({
   });
 
   const [quantity, setQuantity] = useState(1);
+  const [quantityDraft, setQuantityDraft] = useState("1");
   const [recipientLabel, setRecipientLabel] = useState(defaultRecipientLabel);
   const [notes, setNotes] = useState("");
+
+  const applyQuantity = (next: number) => {
+    const clamped = Math.max(1, Math.min(50, next));
+    setQuantity(clamped);
+    setQuantityDraft(String(clamped));
+  };
 
   // Handle single select (Radio)
   const handleSingleSelect = (optionId: number, valueName: string) => {
@@ -129,26 +138,27 @@ export default function ProductDetailModal({
       >
         {/* Modal Header */}
         <div className="relative">
-          <div className="relative w-full h-44 sm:h-52 bg-coffee-100">
+          <div className="relative w-full h-48 sm:h-56 bg-coffee-100">
             <Image
               src={product.imageUrl}
               alt={product.name}
               fill
               className="object-cover"
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/15" />
           </div>
 
           <button
             onClick={onClose}
             className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 transition-colors z-10"
+            aria-label="Đóng"
           >
             <X className="w-5 h-5" />
           </button>
 
-          <div className="absolute bottom-3 left-4 right-4 text-white">
+          <div className="absolute bottom-3 left-4 right-10 text-white">
             <h2 className="text-xl font-bold leading-tight">{product.name}</h2>
-            <p className="text-xs text-amber-200 mt-0.5 line-clamp-1">{product.description}</p>
+            <p className="text-xs text-amber-200 mt-1 leading-relaxed">{product.description}</p>
           </div>
         </div>
 
@@ -163,6 +173,8 @@ export default function ProductDetailModal({
               <div className={`grid gap-2 ${product.variants.length === 1 ? "grid-cols-1" : product.variants.length === 2 ? "grid-cols-2" : "grid-cols-3"}`}>
                 {product.variants.map((v) => {
                   const isSelected = selectedVariant.id === v.id;
+                  const variantPrice = (product.salePrice ?? product.basePrice) + v.extraPrice;
+                  const isLyVariant = v.sizeName.trim().toLowerCase() === "ly";
                   return (
                     <button
                       key={v.id}
@@ -174,14 +186,30 @@ export default function ProductDetailModal({
                           : "border-coffee-200 hover:border-coffee-300 text-coffee-700 bg-white"
                       }`}
                     >
-                      <span className="text-xs font-semibold">{v.sizeName}</span>
-                      <span className="text-[11px] text-coffee-500 mt-1 font-medium">
-                        {v.extraPrice > 0 ? `+${formatVND(v.extraPrice)}` : "Chuẩn"}
+                      <div className="flex items-center justify-between gap-1 w-full">
+                        <span className="text-xs font-semibold">{v.sizeName}</span>
+                        {isLyVariant && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 whitespace-nowrap">
+                            Từ 5 ly
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[11px] text-coffee-600 mt-1 font-bold">
+                        {formatVND(variantPrice)}
                       </span>
                     </button>
                   );
                 })}
               </div>
+              {selectedVariant.sizeName.trim().toLowerCase() === "ly" &&
+                existingLyCount + quantity < MIN_LY_ORDER && (
+                  <div className="mt-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl px-3 py-2 text-[11px] font-semibold leading-snug flex items-center justify-between gap-2">
+                    <span>{MIN_LY_MESSAGE}</span>
+                    <span className="shrink-0 bg-rose-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      {existingLyCount + quantity}/{MIN_LY_ORDER} ly
+                    </span>
+                  </div>
+                )}
             </div>
           )}
 
@@ -201,7 +229,7 @@ export default function ProductDetailModal({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {opt.values.map((val) => {
                     const isChecked = currentSelected.includes(val.name);
 
@@ -214,16 +242,16 @@ export default function ProductDetailModal({
                             ? handleToggleMultiple(opt.id, val.name)
                             : handleSingleSelect(opt.id, val.name)
                         }
-                        className={`py-2 px-3 rounded-xl text-left text-xs border transition-all flex items-center justify-between ${
+                        className={`py-2.5 px-3 rounded-xl text-left text-xs border transition-all flex items-center justify-between gap-2 ${
                           isChecked
                             ? "border-caramel bg-amber-50/80 font-semibold text-coffee-900"
                             : "border-coffee-200 hover:border-coffee-300 text-coffee-700 bg-white"
                         }`}
                       >
-                        <span className="line-clamp-1">{val.name}</span>
-                        <div className="flex items-center gap-1">
+                        <span className="leading-snug min-w-0 break-words">{val.name}</span>
+                        <div className="flex items-center gap-1 shrink-0">
                           {val.extraPrice > 0 && (
-                            <span className="text-[10px] text-caramel font-bold">
+                            <span className="text-[10px] text-caramel font-bold whitespace-nowrap">
                               +{formatVND(val.extraPrice)}
                             </span>
                           )}
@@ -269,21 +297,43 @@ export default function ProductDetailModal({
 
         {/* Modal Footer (Quantity & Add Button) */}
         <div className="p-4 bg-coffee-50/80 border-t border-coffee-100 flex items-center justify-between gap-3">
-          {/* Quantity Stepper */}
-          <div className="flex items-center gap-2 bg-white rounded-xl border border-coffee-200 p-1">
+          {/* Quantity Stepper (1 - 50) */}
+          <div className="flex items-center gap-1.5 bg-white rounded-xl border border-coffee-200 p-1" title="Chọn số lượng từ 1 đến 50">
             <button
               type="button"
-              onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+              onClick={() => applyQuantity(quantity - 1)}
               disabled={quantity <= 1}
               className="w-7 h-7 rounded-lg text-coffee-700 hover:bg-coffee-100 flex items-center justify-center disabled:opacity-30"
+              aria-label="Giảm số lượng"
             >
               <Minus className="w-3.5 h-3.5" />
             </button>
-            <span className="w-6 text-center text-sm font-bold text-coffee-900">{quantity}</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={quantityDraft}
+              onChange={(e) => {
+                const raw = e.target.value;
+                setQuantityDraft(raw);
+                const parsed = parseInt(raw, 10);
+                if (!Number.isNaN(parsed) && parsed >= 1) {
+                  setQuantity(Math.min(50, parsed));
+                }
+              }}
+              onBlur={() => {
+                const parsed = parseInt(quantityDraft, 10);
+                applyQuantity(Number.isNaN(parsed) ? 1 : parsed);
+              }}
+              className="w-9 text-center text-sm font-bold text-coffee-900 bg-transparent focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              aria-label="Số lượng (tối đa 50)"
+            />
             <button
               type="button"
-              onClick={() => setQuantity((q) => q + 1)}
-              className="w-7 h-7 rounded-lg text-coffee-700 hover:bg-coffee-100 flex items-center justify-center"
+              onClick={() => applyQuantity(quantity + 1)}
+              disabled={quantity >= 50}
+              className="w-7 h-7 rounded-lg text-coffee-700 hover:bg-coffee-100 flex items-center justify-center disabled:opacity-30"
+              aria-label="Tăng số lượng"
             >
               <Plus className="w-3.5 h-3.5" />
             </button>

@@ -22,12 +22,13 @@ import {
   Truck,
 } from "lucide-react";
 import { useCart } from "@/context/CartContext";
-import { formatVND, POPULAR_BUILDINGS } from "@/lib/utils";
+import { formatVND, POPULAR_BUILDINGS, MIN_LY_ORDER, getMinLyValidationError } from "@/lib/utils";
 import { OrderType, PaymentMethod } from "@/types";
 
 export default function CartCheckoutPage() {
   const router = useRouter();
-  const { items, updateQuantity, removeItem, clearCart, totalItems, totalPrice } = useCart();
+  const { items, updateQuantity, removeItem, clearCart, totalItems, lyCount, totalPrice } = useCart();
+  const minLyError = getMinLyValidationError(items);
 
   // Order Type
   const [orderType, setOrderType] = useState<OrderType>("OFFICE_DELIVERY");
@@ -204,6 +205,11 @@ export default function CartCheckoutPage() {
     e.preventDefault();
     setFormError("");
 
+    if (minLyError) {
+      setFormError(minLyError);
+      return;
+    }
+
     if (!recipientName.trim()) {
       setFormError("Vui lòng nhập Họ và tên người nhận");
       return;
@@ -328,7 +334,7 @@ export default function CartCheckoutPage() {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
-                      <h3 className="font-bold text-sm text-coffee-900 line-clamp-1">
+                      <h3 className="font-bold text-sm text-coffee-900 leading-snug">
                         {item.product.name}
                       </h3>
                       <button
@@ -346,7 +352,7 @@ export default function CartCheckoutPage() {
 
                     {/* Options list */}
                     {item.selectedOptions.length > 0 && (
-                      <div className="text-[11px] text-coffee-500 line-clamp-2 mt-0.5">
+                      <div className="text-[11px] text-coffee-500 mt-0.5 leading-relaxed">
                         {item.selectedOptions.map((o) => o.valueName).join(" • ")}
                       </div>
                     )}
@@ -368,13 +374,14 @@ export default function CartCheckoutPage() {
                         >
                           <Minus className="w-3 h-3" />
                         </button>
-                        <span className="text-xs font-bold w-5 text-center text-coffee-900">
+                        <span className="text-xs font-bold min-w-[1.5rem] text-center text-coffee-900">
                           {item.quantity}
                         </span>
                         <button
                           type="button"
                           onClick={() => updateQuantity(item.cartItemId, 1)}
-                          className="w-6 h-6 rounded flex items-center justify-center hover:bg-white text-coffee-700"
+                          disabled={item.quantity >= 50}
+                          className="w-6 h-6 rounded flex items-center justify-center hover:bg-white text-coffee-700 disabled:opacity-30"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
@@ -716,6 +723,15 @@ export default function CartCheckoutPage() {
               </div>
             </div>
 
+            {minLyError && (
+              <div className="text-xs text-rose-800 font-bold bg-rose-50 p-3 rounded-xl border border-rose-200 flex items-center justify-between gap-2">
+                <span>{minLyError}</span>
+                <span className="shrink-0 bg-rose-600 text-white text-[10px] px-2 py-0.5 rounded-full">
+                  {lyCount}/{MIN_LY_ORDER} ly
+                </span>
+              </div>
+            )}
+
             {formError && (
               <p className="text-xs text-red-500 font-semibold bg-red-50 p-2.5 rounded-xl border border-red-200">
                 {formError}
@@ -726,10 +742,20 @@ export default function CartCheckoutPage() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full bg-coffee-800 hover:bg-coffee-900 text-white font-bold py-3 px-4 rounded-2xl shadow-lg active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+              className={`w-full font-bold py-3 px-4 rounded-2xl shadow-lg active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 ${
+                minLyError
+                  ? "bg-rose-600 hover:bg-rose-700 text-white"
+                  : "bg-coffee-800 hover:bg-coffee-900 text-white"
+              }`}
             >
               <ShieldCheck className="w-4 h-4 text-amber-300" />
-              <span>{isSubmitting ? "Đang xử lý đơn..." : "Xác nhận Đặt hàng"}</span>
+              <span>
+                {isSubmitting
+                  ? "Đang xử lý đơn..."
+                  : minLyError
+                  ? `Cần đủ ${MIN_LY_ORDER} ly để mở cổng thanh toán (${lyCount}/${MIN_LY_ORDER})`
+                  : "Xác nhận Đặt hàng"}
+              </span>
             </button>
 
             {/* Hoặc đặt giao qua Xanh SM Ngon */}

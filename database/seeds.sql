@@ -43,9 +43,7 @@ INSERT INTO product_option_values (id, option_id, name, extra_price, is_default,
 -- Topping thêm
 (10, 3, 'Thêm lớp Kem Trứng Muối béo ngậy', 10000, FALSE, 1),
 (11, 3, 'Thêm lớp Kem Muối Huế mặn mà', 8000, FALSE, 2),
-(12, 3, 'Thêm 1 shot cà phê đậm đặc', 7000, FALSE, 3),
-(13, 3, 'Sương sáo thanh mát', 6000, FALSE, 4),
-(14, 3, 'Trân châu trắng 3Q giòn', 7000, FALSE, 5);
+(12, 3, 'Thêm 1 shot cà phê đậm đặc', 7000, FALSE, 3);
 
 -- 4. PRODUCTS (5 MÓN NGUYÊN BẢN MENU CÀ XÒI)
 INSERT INTO products (id, category_id, name, slug, description, image_url, base_price, sale_price, is_available, is_featured, prep_time_minutes, tags) VALUES

@@ -42,3 +42,38 @@ export const POPULAR_BUILDINGS = [
   "Khu văn phòng Quận Ngũ Hành Sơn, Đà Nẵng",
   "Khách ghé quán lấy trực tiếp (để gặp Xòi)",
 ];
+
+export const MIN_LY_ORDER = 5;
+export const MIN_LY_MESSAGE = "🐾 Thêm vài món cho đủ 5 ly để Xòi mở cổng thanh toán nhé!";
+
+interface LyCountableItem {
+  variant?: { sizeName?: string };
+  variantName?: string;
+  quantity?: number;
+}
+
+/**
+ * Đếm tổng số lượng đồ uống chọn quy cách "Ly" trong giỏ/đơn hàng.
+ */
+export function countLyItems(items: LyCountableItem[]): number {
+  return items.reduce((sum, item) => {
+    const size = (item.variant?.sizeName ?? item.variantName ?? "").trim().toLowerCase();
+    if (size === "ly") {
+      return sum + (item.quantity || 1);
+    }
+    return sum;
+  }, 0);
+}
+
+/**
+ * Kiểm tra điều kiện tối thiểu 5 ly khi đơn hàng có chọn size "Ly".
+ * Trả về thông báo lỗi nếu tổng số Ly từ 1..4, ngược lại trả về null.
+ */
+export function getMinLyValidationError(items: LyCountableItem[]): string | null {
+  const lyCount = countLyItems(items);
+  if (lyCount > 0 && lyCount < MIN_LY_ORDER) {
+    return MIN_LY_MESSAGE;
+  }
+  return null;
+}
+

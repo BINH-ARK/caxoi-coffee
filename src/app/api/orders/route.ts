@@ -11,6 +11,7 @@ import {
 import { saveOrderToMySql } from "@/lib/mysql";
 import { calculateShippingDistance } from "@/lib/googleMaps";
 import { sendOrderNotificationEmail } from "@/lib/mail";
+import { getMinLyValidationError } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,14 @@ export async function POST(request: Request) {
     if (!items || items.length === 0) {
       return NextResponse.json(
         { success: false, message: "Giỏ hàng không có sản phẩm" },
+        { status: 400 }
+      );
+    }
+
+    const minLyError = getMinLyValidationError(items);
+    if (minLyError) {
+      return NextResponse.json(
+        { success: false, message: minLyError },
         { status: 400 }
       );
     }

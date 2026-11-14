@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { CartItem } from "@/types";
+import { countLyItems } from "@/lib/utils";
 
 interface CartContextType {
   items: CartItem[];
@@ -10,6 +11,7 @@ interface CartContextType {
   removeItem: (cartItemId: string) => void;
   clearCart: () => void;
   totalItems: number;
+  lyCount: number;
   totalPrice: number;
 }
 
@@ -56,12 +58,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
       if (existingIdx > -1) {
         const updated = [...prev];
-        updated[existingIdx].quantity += newItem.quantity;
-        updated[existingIdx].totalPrice = updated[existingIdx].unitPrice * updated[existingIdx].quantity;
+        const nextQty = Math.min(50, updated[existingIdx].quantity + newItem.quantity);
+        updated[existingIdx].quantity = nextQty;
+        updated[existingIdx].totalPrice = updated[existingIdx].unitPrice * nextQty;
         return updated;
       }
 
-      return [...prev, newItem];
+      return [...prev, { ...newItem, quantity: Math.min(50, newItem.quantity), totalPrice: newItem.unitPrice * Math.min(50, newItem.quantity) }];
     });
   };
 
@@ -70,7 +73,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       prev
         .map((item) => {
           if (item.cartItemId === cartItemId) {
-            const newQty = item.quantity + delta;
+            const newQty = Math.min(50, item.quantity + delta);
             if (newQty <= 0) return null;
             return {
               ...item,
@@ -93,6 +96,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   };
 
   const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
+  const lyCount = countLyItems(items);
   const totalPrice = items.reduce((sum, item) => sum + item.totalPrice, 0);
 
   return (
@@ -104,6 +108,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         removeItem,
         clearCart,
         totalItems,
+        lyCount,
         totalPrice,
       }}
     >

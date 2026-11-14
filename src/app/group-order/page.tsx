@@ -6,7 +6,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { Users, Plus, ArrowRight, Building, Coffee, Sparkles, ShieldCheck, ArrowLeft } from "lucide-react";
 import { POPULAR_BUILDINGS } from "@/lib/utils";
-import CaXoiMascot from "@/components/CaXoiMascot";
 
 export default function GroupOrderIndexPage() {
   const router = useRouter();

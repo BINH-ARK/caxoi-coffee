@@ -59,8 +59,6 @@ export const INITIAL_OPTIONS: ProductOption[] = [
       { id: 10, optionId: 3, name: "Thêm lớp Kem Trứng Muối béo ngậy", extraPrice: 10000, isDefault: false, displayOrder: 1 },
       { id: 11, optionId: 3, name: "Thêm lớp Kem Muối Huế mặn mà", extraPrice: 8000, isDefault: false, displayOrder: 2 },
       { id: 12, optionId: 3, name: "Thêm 1 shot cà phê đậm đặc", extraPrice: 7000, isDefault: false, displayOrder: 3 },
-      { id: 13, optionId: 3, name: "Sương sáo giòn thanh mát", extraPrice: 6000, isDefault: false, displayOrder: 4 },
-      { id: 14, optionId: 3, name: "Trân châu trắng 3Q giòn", extraPrice: 7000, isDefault: false, displayOrder: 5 },
     ],
   },
 ];

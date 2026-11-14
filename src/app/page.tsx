@@ -29,15 +29,14 @@ import { Category, Product, ProductVariant, ProductOption, BusinessSettings, Car
 import { useCart } from "@/context/CartContext";
 import ProductCard from "@/components/ProductCard";
 import ProductDetailModal from "@/components/ProductDetailModal";
-import CaXoiMascot from "@/components/CaXoiMascot";
 import CaXoiMenuBoard from "@/components/CaXoiMenuBoard";
 import { INITIAL_CATEGORIES, INITIAL_PRODUCTS, INITIAL_OPTIONS, INITIAL_SETTINGS } from "@/lib/store";
 import { getOperatingHoursStatus } from "@/lib/vietqr";
-import { formatVND } from "@/lib/utils";
+import { formatVND, MIN_LY_ORDER, MIN_LY_MESSAGE } from "@/lib/utils";
 
 export default function HomePage() {
   const router = useRouter();
-  const { addToCart } = useCart();
+  const { addToCart, lyCount } = useCart();
 
   const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
@@ -50,6 +49,7 @@ export default function HomePage() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedVariantName, setSelectedVariantName] = useState<string | undefined>(undefined);
   const [menuViewMode, setMenuViewMode] = useState<"BOARD" | "GRID">("BOARD");
+  const [lyToastMsg, setLyToastMsg] = useState<string | null>(null);
 
   // Multi-purpose lookup for re-order (Phone / Name / Order Code)
   const [lookupPhone, setLookupPhone] = useState("");
@@ -253,38 +253,40 @@ export default function HomePage() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-4 space-y-6">
-      {/* 1. HERO BANNER CÀ XÒI */}
-      <section 
+    <div className="w-full">
+      {/* 1. HERO BANNER CÀ XÒI - FULL SCREEN */}
+      <section
         style={{ backgroundColor: "#140A06" }}
-        className="relative overflow-hidden rounded-3xl bg-coffee-950 bg-gradient-to-br from-[#140A06] via-[#23120B] to-[#3B1E13] text-white p-6 sm:p-8 shadow-xl border border-pink-900/30"
+        className="relative w-full min-h-[calc(100vh-61px)] flex items-center overflow-hidden bg-coffee-950 bg-gradient-to-br from-[#140A06] via-[#23120B] to-[#3B1E13] text-white py-10 sm:py-14 lg:py-16 shadow-xl border-b border-pink-900/30"
       >
         {/* Cute watermark pattern */}
-        <div className="absolute inset-0 opacity-[0.04] pointer-events-none select-none text-[20px] font-black tracking-widest text-pink-300 leading-relaxed overflow-hidden whitespace-nowrap">
-          CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI<br />
-          CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI<br />
-          CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI
+        <div className="absolute inset-0 opacity-[0.04] pointer-events-none select-none text-[20px] sm:text-[24px] font-black tracking-widest text-pink-300 leading-relaxed overflow-hidden whitespace-nowrap">
+          {Array.from({ length: 20 }).map((_, i) => (
+            <div key={i} className="-ml-8">
+              CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI • CÀ XÒI
+            </div>
+          ))}
         </div>
 
-        <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="max-w-xl space-y-3">
+        <div className="relative z-10 max-w-7xl mx-auto w-full px-4 sm:px-8 flex flex-col md:flex-row items-center justify-between gap-8 lg:gap-12">
+          <div className="max-w-2xl space-y-4 sm:space-y-5">
             {/* Tag / Location Pill */}
-            <div className="inline-flex flex-wrap items-center gap-2 px-3 py-1 rounded-full bg-pink-500/20 border border-pink-400/30 text-pink-200 text-xs font-bold tracking-wide">
+            <div className="inline-flex flex-wrap items-center gap-2 px-3.5 py-1.5 rounded-full bg-pink-500/20 border border-pink-400/30 text-pink-200 text-xs sm:text-sm font-bold tracking-wide">
               <span>🐾 Quán Cà Xòi</span>
               <span className="text-pink-300">•</span>
               <span className="flex items-center gap-1">
-                <MapPin className="w-3 h-3 text-pink-300" />
+                <MapPin className="w-3.5 h-3.5 text-pink-300" />
                 Hải Châu, Thanh Khê, Ngũ Hành Sơn, Đà Nẵng
               </span>
             </div>
 
             {/* Official Slogan */}
-            <div className="space-y-1">
-              <span className="text-rose-400 font-extrabold text-sm sm:text-base tracking-wide uppercase flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-amber-300" />
+            <div className="space-y-1.5">
+              <span className="text-rose-400 font-extrabold text-sm sm:text-base lg:text-lg tracking-wide uppercase flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300" />
                 Trạm cấp cứu cơn buồn ngủ công sở ☕
               </span>
-              <h1 className="text-3xl sm:text-5xl font-black tracking-tight leading-tight text-white">
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight leading-[1.12] text-white">
                 “Tỉnh như sáo, <br className="hidden sm:inline" />
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-300 via-rose-300 to-amber-300">
                   báo như Xòi”
@@ -292,41 +294,41 @@ export default function HomePage() {
               </h1>
             </div>
 
-            <p className="text-xs sm:text-sm text-pink-100/90 leading-relaxed max-w-lg">
-              Giao siêu tốc Đà Nẵng - Gom đơn cả phòng, Cà Xòi bao giá! Cà phê cốt đậm đà, kem trứng muối, kem muối Huế thơm ngậy. Đóng ly uống liền hoặc chai bỏ túi 100ml / 250ml tiện lợi!
+            <p className="text-sm sm:text-base lg:text-[17px] text-pink-100/90 leading-relaxed max-w-xl">
+              {'Giao siêu tốc Đà Nẵng - Gom đơn cả phòng, Cà Xòi bao giá! Cà phê cốt đậm đà, kem trứng muối, kem muối Huế thơm ngậy. Không sợ đá tan làm nhạt vị khi họp hành dở dang — cứ cất một chai vào túi hoặc tủ lạnh văn phòng, lúc nào "sập nguồn" thì rót ra nhâm nhi ngay.'}
             </p>
 
             {/* Service & Hotline highlight */}
-            <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-bold">
-              <span className="px-2.5 py-1 rounded-lg bg-pink-500/20 text-pink-200 border border-pink-400/30">
+            <div className="flex flex-wrap items-center gap-2.5 pt-1 text-xs font-bold">
+              <span className="px-3 py-1.5 rounded-lg bg-pink-500/20 text-pink-200 border border-pink-400/30">
                 🛵 Xòi ship hoặc khách ghé lấy để gặp Xòi
               </span>
               <a
                 href="tel:0905249733"
-                className="px-2.5 py-1 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 border border-amber-300/40 transition-colors flex items-center gap-1"
+                className="px-3 py-1.5 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 border border-amber-300/40 transition-colors flex items-center gap-1.5"
               >
-                <Phone className="w-3 h-3 text-amber-300" />
+                <Phone className="w-3.5 h-3.5 text-amber-300" />
                 0905.249.733
               </a>
             </div>
 
             {/* Quick Pricing Highlights */}
-            <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-bold">
-              <span className="px-2.5 py-1 rounded-lg bg-white/10 text-pink-100 border border-white/10">
+            <div className="flex flex-wrap items-center gap-2.5 pt-1 text-xs font-bold">
+              <span className="px-3 py-1.5 rounded-lg bg-white/10 text-pink-100 border border-white/10">
                 🥤 Ly: từ <span className="text-amber-300 font-extrabold">13.000đ</span>
               </span>
-              <span className="px-2.5 py-1 rounded-lg bg-white/10 text-pink-100 border border-white/10">
+              <span className="px-3 py-1.5 rounded-lg bg-white/10 text-pink-100 border border-white/10">
                 🧴 Chai 100ml: từ <span className="text-amber-300 font-extrabold">25.000đ</span>
               </span>
-              <span className="px-2.5 py-1 rounded-lg bg-white/10 text-pink-100 border border-white/10">
+              <span className="px-3 py-1.5 rounded-lg bg-white/10 text-pink-100 border border-white/10">
                 🍶 Chai 250ml: từ <span className="text-amber-300 font-extrabold">47.000đ</span>
               </span>
             </div>
 
-            <div className="pt-3 flex flex-wrap items-center gap-2.5 sm:gap-4">
+            <div className="pt-3 flex flex-wrap items-center gap-3 sm:gap-4">
               <Link
                 href="/group-order"
-                className="inline-flex items-center gap-2 bg-gradient-to-r from-rose-500 to-amber-500 hover:from-rose-600 hover:to-amber-600 text-white font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-md transition-all active:scale-95"
+                className="inline-flex items-center gap-2 bg-gradient-to-r from-rose-500 to-amber-500 hover:from-rose-600 hover:to-amber-600 text-white font-bold text-xs sm:text-sm px-5 py-3 rounded-xl shadow-md transition-all active:scale-95"
               >
                 <Users className="w-4 h-4" />
                 <span>Gom đơn cả phòng (Cà Xòi bao giá)</span>
@@ -334,7 +336,7 @@ export default function HomePage() {
 
               <a
                 href="#menu"
-                className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl backdrop-blur-sm transition-all"
+                className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs sm:text-sm px-5 py-3 rounded-xl backdrop-blur-sm transition-all"
               >
                 <Coffee className="w-4 h-4 text-amber-300" />
                 <span>Xem Bảng Menu Cà Xòi</span>
@@ -343,8 +345,8 @@ export default function HomePage() {
           </div>
 
           {/* Right Official Logo & Mascot Card */}
-          <div className="relative shrink-0 flex flex-col items-center justify-center p-3 sm:p-4 bg-gradient-to-b from-pink-200/20 via-pink-300/10 to-transparent rounded-3xl border border-pink-300/20 shadow-inner">
-            <div className="w-40 sm:w-48 h-40 sm:h-48 rounded-2xl overflow-hidden border-2 border-pink-300/60 shadow-xl bg-[#FFD1E3] relative mb-2 group">
+          <div className="relative shrink-0 flex flex-col items-center justify-center p-4 sm:p-5 bg-gradient-to-b from-pink-200/20 via-pink-300/10 to-transparent rounded-3xl border border-pink-300/20 shadow-inner">
+            <div className="w-48 sm:w-64 lg:w-72 h-48 sm:h-64 lg:h-72 rounded-2xl overflow-hidden border-2 border-pink-300/60 shadow-2xl bg-[#FFD1E3] relative mb-3 group">
               <Image
                 src="/images/ca-xoi-logo.jpg"
                 alt="Logo Quán Cà Xòi"
@@ -354,21 +356,23 @@ export default function HomePage() {
               />
             </div>
             <div className="text-center space-y-1">
-              <span className="inline-block bg-white text-coffee-950 font-black text-xs px-3 py-1 rounded-full shadow-md">
+              <span className="inline-block bg-white text-coffee-950 font-black text-xs sm:text-sm px-3.5 py-1 rounded-full shadow-md">
                 🐾 Mèo Xòi & Trái Xoài 🥭
               </span>
-              <p className="text-[10px] text-pink-200 font-semibold">
+              <p className="text-[11px] sm:text-xs text-pink-200 font-semibold">
                 Quán cà phê Internet • Đà Nẵng
               </p>
             </div>
           </div>
         </div>
 
-        {/* Decorative background element */}
-        <div className="absolute -right-10 -bottom-10 w-72 h-72 rounded-full bg-pink-500/10 blur-3xl pointer-events-none" />
+        {/* Decorative background elements */}
+        <div className="absolute -right-16 -bottom-16 w-96 h-96 rounded-full bg-pink-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute -left-20 -top-20 w-80 h-80 rounded-full bg-amber-500/5 blur-3xl pointer-events-none" />
       </section>
 
-      {/* 2. OPERATIONAL STATUS & VOUCHERS BAR */}
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+        {/* 2. OPERATIONAL STATUS & VOUCHERS BAR */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {/* Status card */}
         {(() => {
@@ -391,7 +395,7 @@ export default function HomePage() {
                 <Clock className="w-5 h-5" />
               </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${
                       isOpen
@@ -401,7 +405,7 @@ export default function HomePage() {
                         : "bg-stone-400"
                     }`}
                   />
-                  <span className="text-xs font-bold text-coffee-900 truncate">
+                  <span className="text-xs font-bold text-coffee-900 leading-snug">
                     {isOpen
                       ? "Đang mở cửa phục vụ"
                       : isPaused
@@ -412,7 +416,7 @@ export default function HomePage() {
                     {settings.openTime} - {settings.closeTime}
                   </span>
                 </div>
-                <p className="text-[11px] text-coffee-500 mt-0.5 line-clamp-1">
+                <p className="text-[11px] text-coffee-500 mt-0.5 leading-snug">
                   {settings.storeStatusMessage || hoursInfo.remainingMessage}
                 </p>
               </div>
@@ -834,18 +838,36 @@ export default function HomePage() {
           )
         )}
       </section>
+      </div>
+
+      {/* 5-Ly Minimum Toast Notification */}
+      {Boolean(lyToastMsg) && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[70] w-[92%] max-w-md bg-rose-600 text-white px-4 py-3 rounded-2xl shadow-2xl border border-rose-400/50 flex items-center justify-between gap-3 text-xs sm:text-sm font-bold animate-fade-in">
+          <span>{lyToastMsg}</span>
+          <span className="shrink-0 bg-white/20 px-2.5 py-1 rounded-full text-[11px] font-extrabold">
+            {lyCount}/{MIN_LY_ORDER} ly
+          </span>
+        </div>
+      )}
 
       {/* Product Detail Customization Modal */}
       <ProductDetailModal
         product={selectedProduct}
         options={options}
         initialVariantName={selectedVariantName}
+        existingLyCount={lyCount}
         onClose={() => {
           setSelectedProduct(null);
           setSelectedVariantName(undefined);
         }}
         onAddToCart={(item: CartItem) => {
           addToCart(item);
+          if (item.variant.sizeName === "Ly" && lyCount + item.quantity < MIN_LY_ORDER) {
+            setLyToastMsg(MIN_LY_MESSAGE);
+            setTimeout(() => {
+              setLyToastMsg("");
+            }, 4000);
+          }
         }}
       />
     </div>

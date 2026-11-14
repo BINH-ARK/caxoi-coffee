@@ -268,9 +268,7 @@ INSERT INTO product_option_values (id, option_id, name, extra_price, is_default,
 -- Topping & Kem béo
 (10, 3, 'Thêm lớp Kem Trứng Muối béo ngậy', 10000, 0, 1),
 (11, 3, 'Thêm lớp Kem Muối Huế mặn mà', 8000, 0, 2),
-(12, 3, 'Thêm 1 shot cà phê đậm đặc', 7000, 0, 3),
-(13, 3, 'Sương sáo giòn thanh mát', 6000, 0, 4),
-(14, 3, 'Trân châu trắng 3Q giòn', 7000, 0, 5);
+(12, 3, 'Thêm 1 shot cà phê đậm đặc', 7000, 0, 3);
 
 -- ----------------------------------------------------------------------------
 -- 9. BẢNG CẤU HÌNH VẬN HÀNH & VIETQR (BUSINESS_SETTINGS)

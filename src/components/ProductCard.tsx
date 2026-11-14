@@ -64,10 +64,10 @@ export default function ProductCard({ product, onSelect }: ProductCardProps) {
         </div>
 
         {/* Product Info */}
-        <h3 className="font-bold text-coffee-900 text-sm sm:text-base line-clamp-1 group-hover:text-caramel transition-colors">
+        <h3 className="font-bold text-coffee-900 text-sm sm:text-base leading-snug group-hover:text-caramel transition-colors">
           {product.name}
         </h3>
-        <p className="text-coffee-500 text-xs line-clamp-2 mt-1 leading-relaxed">
+        <p className="text-coffee-500 text-xs mt-1 leading-relaxed">
           {product.description}
         </p>
         {/* Packaging / Variant Pills (Ly • 100ml • 250ml) */}

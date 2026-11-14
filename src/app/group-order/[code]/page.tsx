@@ -31,7 +31,7 @@ import {
   Flame,
 } from "lucide-react";
 import { GroupSession, Product, ProductOption, Category, CartItem, OrderItemRecord } from "@/types";
-import { formatVND } from "@/lib/utils";
+import { formatVND, MIN_LY_ORDER, countLyItems, getMinLyValidationError } from "@/lib/utils";
 import { useCart } from "@/context/CartContext";
 import ProductDetailModal from "@/components/ProductDetailModal";
 import CupStickerPreview from "@/components/CupStickerPreview";
@@ -74,6 +74,7 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
   // Toast message
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [groupCheckoutError, setGroupCheckoutError] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -186,6 +187,14 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
   const handleLockAndCheckout = async () => {
     if (!session || session.items.length === 0) return;
+
+    const minLyError = getMinLyValidationError(session.items);
+    if (minLyError) {
+      setGroupCheckoutError(minLyError);
+      showToast(minLyError);
+      return;
+    }
+    setGroupCheckoutError(null);
 
     try {
       // 1. Lock room on server
@@ -699,7 +708,7 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
                       </div>
                     </div>
 
-                    <div className="text-xs font-bold text-coffee-900 group-hover:text-caramel transition-colors line-clamp-1">
+                    <div className="text-xs font-bold text-coffee-900 group-hover:text-caramel transition-colors leading-snug">
                       {p.name}
                     </div>
                     <div className="text-[11px] text-coffee-500 font-semibold mt-0.5">
@@ -973,7 +982,7 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
                     <div className="border-t border-coffee-100 pt-2 space-y-1 text-[11px] text-coffee-600">
                       {person.items.map((i) => (
                         <div key={i.cartItemId} className="flex justify-between">
-                          <span className="line-clamp-1">
+                          <span>
                             • {i.product.name} ({i.variant.sizeName})
                           </span>
                           <span className="font-semibold text-coffee-800 shrink-0 ml-2">
@@ -1079,6 +1088,14 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
         )}
 
         {/* HOST CHECKOUT ACTIONS FOOTER */}
+        {session.items.length > 0 && getMinLyValidationError(session.items) && (
+          <div className="mt-4 bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-2xl text-xs font-bold flex items-center justify-between gap-2">
+            <span>{groupCheckoutError || getMinLyValidationError(session.items)}</span>
+            <span className="shrink-0 bg-rose-100 px-2.5 py-1 rounded-full text-[11px] font-extrabold">
+              {countLyItems(session.items)}/{MIN_LY_ORDER} ly
+            </span>
+          </div>
+        )}
         {session.items.length > 0 && (
           <div className="pt-5 border-t border-coffee-100 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="text-xs text-coffee-600 space-y-0.5">
@@ -1094,9 +1111,13 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
               <button
                 type="button"
                 onClick={handleLockAndCheckout}
-                className="w-full sm:w-auto bg-coffee-800 hover:bg-coffee-900 text-white font-bold text-xs px-6 py-3.5 rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 shrink-0 active:scale-95"
+                className={`w-full sm:w-auto font-bold text-xs px-6 py-3.5 rounded-2xl transition-all flex items-center justify-center gap-2 shrink-0 active:scale-95 ${
+                  getMinLyValidationError(session.items)
+                    ? "bg-rose-100 hover:bg-rose-200 text-rose-600 border border-rose-200 shadow-sm"
+                    : "bg-coffee-800 hover:bg-coffee-900 text-white shadow-lg"
+                }`}
               >
-                <Lock className="w-4 h-4 text-amber-300" />
+                <Lock className={`w-4 h-4 ${getMinLyValidationError(session.items) ? "text-rose-500" : "text-amber-300"}`} />
                 <span>Chốt đơn nhóm & Thanh toán ({formatVND(totalAmount)})</span>
               </button>
             ) : (
@@ -1235,6 +1256,7 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
         <ProductDetailModal
           product={selectedProduct}
           options={options}
+          existingLyCount={countLyItems(session?.items || [])}
           defaultRecipientLabel={memberName}
           onClose={() => {
             setIsAddingModalOpen(false);

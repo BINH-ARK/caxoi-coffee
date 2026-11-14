@@ -199,9 +199,7 @@ INSERT INTO `product_option_values` (`id`, `option_id`, `name`, `extra_price`, `
 -- Topping thêm
 (10, 3, 'Thêm lớp Kem Trứng Muối béo ngậy', 10000.00, 0, 1),
 (11, 3, 'Thêm lớp Kem Muối Huế mặn mà', 8000.00, 0, 2),
-(12, 3, 'Thêm 1 shot cà phê đậm đặc', 7000.00, 0, 3),
-(13, 3, 'Sương sáo giòn thanh mát', 6000.00, 0, 4),
-(14, 3, 'Trân châu trắng 3Q giòn', 7000.00, 0, 5);
+(12, 3, 'Thêm 1 shot cà phê đậm đặc', 7000.00, 0, 3);
 
 -- --------------------------------------------------------
 -- 8. BẢNG CẤU HÌNH QUÁN & THANH TOÁN (BUSINESS_SETTINGS)
