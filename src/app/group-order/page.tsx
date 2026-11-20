@@ -63,6 +63,16 @@ export default function GroupOrderIndexPage() {
         throw new Error(data.message || "Không thể tạo phòng gom đơn");
       }
 
+      // Lưu hostToken để trình duyệt chủ phòng có quyền khóa đơn và xóa món
+      try {
+        if (data.data?.sessionCode && data.data?.hostToken) {
+          localStorage.setItem(
+            `group_host_token_${String(data.data.sessionCode).toUpperCase()}`,
+            data.data.hostToken
+          );
+        }
+      } catch {}
+
       router.push(`/group-order/${data.data.sessionCode}`);
     } catch (err: any) {
       setCreateError(err.message || "Có lỗi xảy ra");

@@ -17,7 +17,7 @@ import {
   AlertCircle,
   Sparkles,
   Check,
-  Send,
+  ShieldCheck,
   Zap,
   Coffee,
   Truck,
@@ -58,10 +58,6 @@ export default function OperatingAndVietQrSettings({
   const [qrTemplate, setQrTemplate] = useState<VietQrTemplate>("compact2");
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedAcc, setCopiedAcc] = useState(false);
-
-  // Webhook Test Simulation
-  const [isTestingWebhook, setIsTestingWebhook] = useState(false);
-  const [webhookResult, setWebhookResult] = useState<string | null>(null);
 
   // Current system time for live operating hours calculation
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -135,7 +131,7 @@ export default function OperatingAndVietQrSettings({
 
       setSaveSuccess(true);
       onSettingsUpdated(data.data);
-      onShowMessage("✅ Đã lưu cấu hình quán, VietQR và nội dung Trang chủ thành công!");
+      onShowMessage("✅ Đã lưu cấu hình quán, phí giao hàng, VietQR và nội dung Trang chủ thành công!");
       setTimeout(() => setSaveSuccess(false), 3500);
     } catch (err: any) {
       setSaveError(err.message || "Có lỗi xảy ra khi lưu");
@@ -187,6 +183,39 @@ export default function OperatingAndVietQrSettings({
     handleQuickStatusChange(isNowOpen ? "OPEN" : "CLOSED");
   };
 
+  // Quick toggle for dual shipping fee mode (AUTO vs MANUAL_ZERO)
+  const handleQuickShippingModeChange = async (mode: "AUTO" | "MANUAL_ZERO") => {
+    const previous = formData.shippingFeeMode || "AUTO";
+    setFormData((prev) => ({
+      ...prev,
+      shippingFeeMode: mode,
+    }));
+
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shippingFeeMode: mode }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setFormData((prev) => ({ ...prev, shippingFeeMode: previous }));
+        setSaveError(data.message || "Không thể chuyển chế độ tính phí ship.");
+        return;
+      }
+      onSettingsUpdated(data.data);
+      onShowMessage(
+        mode === "MANUAL_ZERO"
+          ? "✅ Đã bật chế độ Phí ship 0đ (báo phí ship thủ công cho khách sau)."
+          : "✅ Đã bật chế độ Tính phí ship tự động theo khoảng cách & chính sách Freeship."
+      );
+    } catch (e) {
+      console.error("Shipping mode update error", e);
+      setFormData((prev) => ({ ...prev, shippingFeeMode: previous }));
+      setSaveError("Lỗi kết nối khi cập nhật chế độ tính phí ship.");
+    }
+  };
+
   // Copy QR Link
   const handleCopyQrLink = () => {
     navigator.clipboard.writeText(previewQrUrl);
@@ -216,34 +245,6 @@ export default function OperatingAndVietQrSettings({
       URL.revokeObjectURL(blobUrl);
     } catch {
       window.open(previewQrUrl, "_blank");
-    }
-  };
-
-  // Webhook Test Simulation
-  const handleTestWebhook = async () => {
-    setIsTestingWebhook(true);
-    setWebhookResult(null);
-    try {
-      const res = await fetch("/api/payments/webhook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gateway: formData.vietqrBankId || "MB",
-          content: "CF2611-001 NGUYEN VAN A CHUYEN KHOAN",
-          transferAmount: 110000,
-          accountNumber: formData.vietqrAccountNo,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setWebhookResult("✅ Đối soát Webhook thành công! Đơn CF2611-001 đã chuyển sang trạng thái ĐÃ THANH TOÁN.");
-      } else {
-        setWebhookResult(`ℹ️ Kết quả: ${data.message}`);
-      }
-    } catch {
-      setWebhookResult("❌ Không thể kết nối cổng Webhook.");
-    } finally {
-      setIsTestingWebhook(false);
     }
   };
 
@@ -512,12 +513,90 @@ export default function OperatingAndVietQrSettings({
                 />
               </div>
 
+              {/* DUAL SHIPPING FEE MODE SELECTOR */}
+              <div className="pt-2 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="font-bold text-coffee-800 flex items-center gap-1.5">
+                    <Truck className="w-4 h-4 text-caramel" />
+                    <span>Chế độ tính phí giao hàng (Dual Mode):</span>
+                  </label>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      (formData.shippingFeeMode || "AUTO") === "MANUAL_ZERO"
+                        ? "bg-amber-50 text-amber-800 border-amber-200"
+                        : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    }`}
+                  >
+                    {(formData.shippingFeeMode || "AUTO") === "MANUAL_ZERO"
+                      ? "Đang bật: 0đ — Báo thủ công sau"
+                      : "Đang bật: Tự động tính phí"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => handleQuickShippingModeChange("AUTO")}
+                    className={`text-left p-3 rounded-2xl border-2 transition-all ${
+                      (formData.shippingFeeMode || "AUTO") === "AUTO"
+                        ? "bg-emerald-50/70 border-emerald-500 shadow-sm"
+                        : "bg-white border-coffee-200 hover:border-coffee-300"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="font-bold text-coffee-900 text-xs">
+                        1. Tính phí ship tự động
+                      </span>
+                      {(formData.shippingFeeMode || "AUTO") === "AUTO" && (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[11px] text-coffee-600 leading-snug">
+                      Hệ thống tự cộng phí ship cơ bản ({formatVND(formData.baseDeliveryFee)}) hoặc theo khoảng cách, miễn phí từ{" "}
+                      <strong>{formData.freeDeliveryMinCups} ly</strong>.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleQuickShippingModeChange("MANUAL_ZERO")}
+                    className={`text-left p-3 rounded-2xl border-2 transition-all ${
+                      (formData.shippingFeeMode || "AUTO") === "MANUAL_ZERO"
+                        ? "bg-amber-50/80 border-amber-500 shadow-sm"
+                        : "bg-white border-coffee-200 hover:border-coffee-300"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="font-bold text-coffee-900 text-xs">
+                        2. Phí ship 0đ — Báo phí thủ công sau
+                      </span>
+                      {(formData.shippingFeeMode || "AUTO") === "MANUAL_ZERO" && (
+                        <CheckCircle2 className="w-4 h-4 text-amber-600 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[11px] text-coffee-600 leading-snug">
+                      Khách đặt đơn với phí ship tạm tính <strong>0đ</strong>. Nhân viên gọi báo phí thực tế và nhập vào đơn tại tab{" "}
+                      <strong>Đơn hàng → Shipper &amp; Phí ship</strong>.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
               {/* OPERATIONAL METRICS: DELIVERY & CAPACITY */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2">
-                <div className="bg-coffee-50 p-2.5 rounded-xl border border-coffee-100">
-                  <span className="text-[10px] text-coffee-500 font-medium block">Phí ship cơ bản</span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+                <div
+                  className={`p-2.5 rounded-xl border transition-opacity ${
+                    (formData.shippingFeeMode || "AUTO") === "MANUAL_ZERO"
+                      ? "bg-stone-50 border-stone-200 opacity-75"
+                      : "bg-coffee-50 border-coffee-100"
+                  }`}
+                >
+                  <span className="text-[10px] text-coffee-500 font-medium block">
+                    Phí ship cơ bản {(formData.shippingFeeMode || "AUTO") === "MANUAL_ZERO" ? "(chế độ Tự động)" : ""}
+                  </span>
                   <input
                     type="number"
+                    min={0}
                     step={1000}
                     value={formData.baseDeliveryFee}
                     onChange={(e) => handleInputChange("baseDeliveryFee", Number(e.target.value))}
@@ -526,8 +605,16 @@ export default function OperatingAndVietQrSettings({
                   <span className="text-[10px] text-coffee-400">{formatVND(formData.baseDeliveryFee)}</span>
                 </div>
 
-                <div className="bg-coffee-50 p-2.5 rounded-xl border border-coffee-100">
-                  <span className="text-[10px] text-coffee-500 font-medium block">Freeship từ</span>
+                <div
+                  className={`p-2.5 rounded-xl border transition-opacity ${
+                    (formData.shippingFeeMode || "AUTO") === "MANUAL_ZERO"
+                      ? "bg-stone-50 border-stone-200 opacity-75"
+                      : "bg-coffee-50 border-coffee-100"
+                  }`}
+                >
+                  <span className="text-[10px] text-coffee-500 font-medium block">
+                    Freeship từ {(formData.shippingFeeMode || "AUTO") === "MANUAL_ZERO" ? "(chế độ Tự động)" : ""}
+                  </span>
                   <div className="flex items-center gap-1">
                     <input
                       type="number"
@@ -831,45 +918,38 @@ export default function OperatingAndVietQrSettings({
               </button>
             </div>
 
-            {/* WEBHOOK SIMULATOR BOX */}
-            <div className="bg-white p-3.5 rounded-2xl border border-amber-200 space-y-2 text-xs">
-              <div className="flex items-center justify-between">
+            {/* REAL BANK WEBHOOK & RECONCILIATION SECURITY INFO BOX */}
+            <div className="bg-white p-3.5 rounded-2xl border border-emerald-200 space-y-2 text-xs">
+              <div className="flex items-center justify-between gap-2">
                 <span className="font-bold text-coffee-900 flex items-center gap-1.5 text-[11px]">
-                  <Zap className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Kiểm tra Webhook Đối Soát Tự Động</span>
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Đối Soát Thanh Toán An Toàn (Webhook Thật / Admin)</span>
                 </span>
-                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-bold border border-emerald-200">
-                  Auto Check 2s
+                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-bold border border-emerald-200 shrink-0">
+                  Bảo mật HMAC/Bearer
                 </span>
               </div>
-              <p className="text-[11px] text-coffee-500 leading-relaxed">
-                Thử nghiệm gửi tín hiệu thanh toán giả lập tới webhook để kiểm tra luồng chuyển trạng thái tự động sang KDS pha chế:
+              <p className="text-[11px] text-coffee-600 leading-relaxed">
+                Nút mô phỏng chuyển khoản bên giao diện khách hàng đã được <strong>gỡ bỏ hoàn toàn</strong>. Đơn VietQR chỉ chuyển sang{" "}
+                <strong>Đã thanh toán</strong> qua 2 kênh xác thực:
               </p>
-
-              <button
-                type="button"
-                onClick={handleTestWebhook}
-                disabled={isTestingWebhook}
-                className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-50 hover:bg-amber-100 text-coffee-800 border border-amber-300 rounded-xl font-bold text-xs transition-colors"
-              >
-                {isTestingWebhook ? (
-                  <>
-                    <Clock className="w-3.5 h-3.5 animate-spin text-caramel" />
-                    <span>Đang gửi đối soát...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-3.5 h-3.5 text-caramel" />
-                    <span>Bắn giao dịch thanh toán thử nghiệm (Webhook)</span>
-                  </>
-                )}
-              </button>
-
-              {webhookResult && (
-                <div className="p-2 rounded-lg bg-amber-50/70 border border-amber-200 text-[11px] font-semibold text-coffee-800">
-                  {webhookResult}
-                </div>
-              )}
+              <ul className="text-[11px] text-coffee-700 space-y-1 pl-3 list-disc">
+                <li>
+                  <strong>Webhook ngân hàng thật (SePay / Casso):</strong> Trỏ endpoint{" "}
+                  <code className="bg-stone-100 px-1 py-0.5 rounded font-mono text-[10px] text-coffee-900">
+                    POST /api/payments/webhook
+                  </code>{" "}
+                  kèm header{" "}
+                  <code className="bg-stone-100 px-1 py-0.5 rounded font-mono text-[10px] text-coffee-900">
+                    Authorization: Bearer &lt;WEBHOOK_SECRET_KEY&gt;
+                  </code>{" "}
+                  (cấu hình trong tệp <code className="font-mono text-[10px]">.env</code>).
+                </li>
+                <li>
+                  <strong>Thu ngân / Quản lý xác nhận thủ công:</strong> Kiểm tra biến động số dư và bấm xác nhận trực tiếp tại tab{" "}
+                  <strong>Đơn hàng</strong>.
+                </li>
+              </ul>
             </div>
           </div>
         </div>

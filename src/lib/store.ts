@@ -163,6 +163,7 @@ export const INITIAL_SETTINGS: BusinessSettings = {
   hotline: "0905.249.733",
   openTime: "07:00",
   closeTime: "18:30",
+  shippingFeeMode: "AUTO",
   baseDeliveryFee: 15000,
   freeDeliveryMinCups: 3,
   maxSlotCapacityCups: 30,

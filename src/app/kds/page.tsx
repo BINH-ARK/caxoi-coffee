@@ -35,6 +35,8 @@ export default function KdsPage() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const previousOrderCountRef = useRef<number>(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const [kdsNotice, setKdsNotice] = useState<string | null>(null);
 
   // Sticker Print Modal
   const [activePrintOrder, setActivePrintOrder] = useState<Order | null>(null);
@@ -65,11 +67,19 @@ export default function KdsPage() {
     }
   };
 
-  // Web Audio chime function
+  // Web Audio chime function (reuse single AudioContext to prevent browser exhaustion)
   const playChime = () => {
     if (!soundEnabled) return;
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const AudioCtxCtor = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtxCtor) return;
+      if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+        audioCtxRef.current = new AudioCtxCtor();
+      }
+      const audioCtx = audioCtxRef.current;
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = "sine";
@@ -86,9 +96,17 @@ export default function KdsPage() {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      try {
+        audioCtxRef.current?.close();
+      } catch {}
+    };
+  }, []);
+
   const fetchOrders = async () => {
     try {
-      const res = await fetch("/api/orders");
+      const res = await fetch("/api/orders", { cache: "no-store" });
       const data = await res.json();
       if (data.success) {
         const newOrders: Order[] = data.data;
@@ -109,6 +127,7 @@ export default function KdsPage() {
     fetchOrders();
     const interval = setInterval(fetchOrders, 3500);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [soundEnabled]);
 
   const handleUpdateStatus = async (orderId: string, nextStatus: OrderStatus) => {
@@ -123,9 +142,14 @@ export default function KdsPage() {
         setOrders((prev) =>
           prev.map((o) => (o.id === orderId ? { ...o, status: nextStatus } : o))
         );
+      } else {
+        setKdsNotice(data.message || "Không thể cập nhật trạng thái đơn hàng");
+        setTimeout(() => setKdsNotice(null), 3500);
       }
     } catch (e) {
       console.error(e);
+      setKdsNotice("Lỗi kết nối khi cập nhật trạng thái đơn");
+      setTimeout(() => setKdsNotice(null), 3500);
     }
   };
 
@@ -135,14 +159,13 @@ export default function KdsPage() {
     return o.orderType === filterType;
   });
 
-  // Categorize into 4 columns: Đơn mới tiếp nhận > Đang Pha Chế > Đang giao > Sẵn sàng giao
+  // Quy trình chuẩn 4 cột: 1. Đơn mới tiếp nhận -> 2. Đang pha chế -> 3. Sẵn sàng giao/lấy -> 4. Đang giao
   const newOrders = filtered.filter(
     (o) => o.status === "CONFIRMED" || o.status === "PENDING_PAYMENT"
   );
   const brewingOrders = filtered.filter((o) => o.status === "BREWING");
-  const deliveringOrders = filtered.filter((o) => o.status === "DELIVERING");
   const readyOrders = filtered.filter((o) => o.status === "READY");
-  const completedOrders = filtered.filter((o) => o.status === "COMPLETED").slice(0, 5);
+  const deliveringOrders = filtered.filter((o) => o.status === "DELIVERING");
 
   const calculateMinutesSince = (dateStr: string) => {
     const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / (1000 * 60));
@@ -151,6 +174,12 @@ export default function KdsPage() {
 
   return (
     <div className="min-h-screen bg-stone-900 text-stone-100 flex flex-col">
+      {kdsNotice && (
+        <div className="fixed bottom-5 right-5 z-50 bg-rose-900 border border-rose-500 text-white text-xs font-bold px-4 py-3 rounded-2xl shadow-2xl">
+          ⚠️ {kdsNotice}
+        </div>
+      )}
+
       {/* KDS Header Bar */}
       <header className="bg-stone-950 px-4 py-2.5 border-b border-stone-800 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -295,7 +324,7 @@ export default function KdsPage() {
         </button>
       </div>
 
-      {/* 4-Column Kanban Board: Đơn mới tiếp nhận > Đang Pha Chế > Đang giao > Sẵn sàng giao */}
+      {/* 4-Column Kanban Board: 1. Đơn mới tiếp nhận -> 2. Đang pha chế -> 3. Sẵn sàng giao/lấy -> 4. Đang giao */}
       <div className="flex-1 p-3 sm:p-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 overflow-y-auto">
         {/* COLUMN 1: ĐƠN MỚI TIẾP NHẬN */}
         <div className="flex flex-col bg-stone-950/80 rounded-2xl border border-stone-800 overflow-hidden">
@@ -329,7 +358,11 @@ export default function KdsPage() {
                           #{order.orderCode}
                         </span>
                         <div className="text-[11px] text-stone-400 font-medium">
-                          {order.orderType === "OFFICE_DELIVERY" ? "🏢 Giao tòa nhà" : "🚶 Lấy tại quầy"}
+                          {order.orderType === "OFFICE_DELIVERY"
+                            ? "🏢 Giao tòa nhà"
+                            : order.orderType === "GROUP_ORDER"
+                            ? "👥 Đơn nhóm văn phòng"
+                            : "🚶 Lấy tại quầy"}
                         </div>
                       </div>
 
@@ -361,7 +394,7 @@ export default function KdsPage() {
                       )}
                       {order.deliveryNotes && (
                         <div className="text-[11px] text-amber-200 italic">
-                          Note: {order.deliveryNotes}
+                          Note giao: {order.deliveryNotes}
                         </div>
                       )}
                     </div>
@@ -370,12 +403,12 @@ export default function KdsPage() {
                     <div className="bg-stone-950 p-2.5 rounded-lg space-y-2 border border-stone-800">
                       {order.items.map((item, idx) => (
                         <div key={idx} className="text-xs">
-                          <div className="font-bold text-white flex items-center justify-between">
+                          <div className="font-bold text-white flex items-center justify-between gap-1">
                             <span>
                               {item.quantity}x {item.productName} ({item.variantName})
                             </span>
                             {item.recipientLabel && (
-                              <span className="text-[10px] bg-amber-400/20 text-amber-300 px-1.5 py-0.5 rounded font-bold">
+                              <span className="text-[10px] bg-amber-400/20 text-amber-300 px-1.5 py-0.5 rounded font-bold shrink-0">
                                 {item.recipientLabel}
                               </span>
                             )}
@@ -383,6 +416,11 @@ export default function KdsPage() {
                           {item.options && item.options.length > 0 && (
                             <div className="text-[11px] text-stone-400 pl-2 mt-0.5">
                               {item.options.map((o) => o.valueName).join(" • ")}
+                            </div>
+                          )}
+                          {item.itemNotes && (
+                            <div className="text-[11px] text-amber-300 font-semibold pl-2 mt-0.5 italic">
+                              ★ Ghi chú ly: {item.itemNotes}
                             </div>
                           )}
                         </div>
@@ -466,12 +504,12 @@ export default function KdsPage() {
                     <div className="bg-stone-950 p-2.5 rounded-lg space-y-2 border border-stone-800">
                       {order.items.map((item, idx) => (
                         <div key={idx} className="text-xs">
-                          <div className="font-bold text-white flex items-center justify-between">
+                          <div className="font-bold text-white flex items-center justify-between gap-1">
                             <span>
                               {item.quantity}x {item.productName} ({item.variantName})
                             </span>
                             {item.recipientLabel && (
-                              <span className="text-[10px] bg-blue-400/20 text-blue-300 px-1.5 py-0.5 rounded font-bold">
+                              <span className="text-[10px] bg-blue-400/20 text-blue-300 px-1.5 py-0.5 rounded font-bold shrink-0">
                                 {item.recipientLabel}
                               </span>
                             )}
@@ -479,6 +517,11 @@ export default function KdsPage() {
                           {item.options && item.options.length > 0 && (
                             <div className="text-[11px] text-stone-400 pl-2 mt-0.5">
                               {item.options.map((o) => o.valueName).join(" • ")}
+                            </div>
+                          )}
+                          {item.itemNotes && (
+                            <div className="text-[11px] text-amber-300 font-semibold pl-2 mt-0.5 italic">
+                              ★ Ghi chú ly: {item.itemNotes}
                             </div>
                           )}
                         </div>
@@ -498,22 +541,24 @@ export default function KdsPage() {
 
                         <button
                           type="button"
-                          onClick={() => handleUpdateStatus(order.id, "DELIVERING")}
-                          className="flex-1 bg-orange-600 hover:bg-orange-500 text-white font-extrabold text-xs py-2 px-2.5 rounded-lg shadow transition-all flex items-center justify-center gap-1"
+                          onClick={() => handleUpdateStatus(order.id, "READY")}
+                          className="flex-1 bg-teal-600 hover:bg-teal-500 text-white font-extrabold text-xs py-2 px-2.5 rounded-lg shadow transition-all flex items-center justify-center gap-1"
                         >
-                          <Truck className="w-3.5 h-3.5" />
-                          <span>Giao Shipper (Đang giao)</span>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Pha xong • Sẵn sàng &rarr;</span>
                         </button>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => handleUpdateStatus(order.id, "READY")}
-                        className="w-full bg-teal-700/80 hover:bg-teal-600 text-white font-bold text-xs py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1 border border-teal-600/40"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Pha xong • Sẵn sàng giao / lấy</span>
-                      </button>
+                      {order.orderType !== "TAKEAWAY" && (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateStatus(order.id, "DELIVERING")}
+                          className="w-full bg-orange-600/80 hover:bg-orange-500 text-white font-bold text-xs py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1 border border-orange-500/40"
+                        >
+                          <Truck className="w-3.5 h-3.5" />
+                          <span>Bàn giao Shipper ngay</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -522,14 +567,96 @@ export default function KdsPage() {
           </div>
         </div>
 
-        {/* COLUMN 3: ĐANG GIAO */}
+        {/* COLUMN 3: SẴN SÀNG GIAO / LẤY (READY) */}
+        <div className="flex flex-col bg-stone-950/80 rounded-2xl border border-stone-800 overflow-hidden">
+          <div className="bg-teal-500/10 border-b border-teal-500/20 px-4 py-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-teal-400" />
+              <h2 className="text-sm font-bold text-teal-300 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-teal-400" />
+                <span>3. SẴN SÀNG GIAO / LẤY</span>
+              </h2>
+            </div>
+            <span className="bg-teal-500 text-black text-xs font-black px-2 py-0.5 rounded-full">
+              {readyOrders.length}
+            </span>
+          </div>
+
+          <div className="p-3 space-y-3 flex-1 overflow-y-auto">
+            {readyOrders.length === 0 ? (
+              <p className="text-center text-xs text-stone-500 py-10">Chưa có đơn sẵn sàng</p>
+            ) : (
+              readyOrders.map((order) => (
+                <div
+                  key={order.id}
+                  className="bg-stone-900 rounded-xl p-3.5 border border-teal-500/40 shadow space-y-2.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-base font-black text-teal-300">
+                      #{order.orderCode}
+                    </span>
+                    <span className="text-[11px] font-bold text-teal-300 bg-teal-950 px-2 py-0.5 rounded border border-teal-800">
+                      {order.orderType === "TAKEAWAY" ? "Chờ khách lấy" : "Chờ Shipper nhận"}
+                    </span>
+                  </div>
+
+                  <div className="text-xs text-stone-300 space-y-0.5">
+                    <div>
+                      <strong className="text-white text-sm">{order.recipientName}</strong> • {order.recipientPhone}
+                    </div>
+                    <div className="text-stone-400 text-[11px]">
+                      {[order.floorRoom, order.buildingName, order.companyName].filter(Boolean).join(" - ") || "Tại quầy Cà Xòi"}
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] text-stone-400 bg-stone-950/50 p-2 rounded border border-stone-800">
+                    {order.items.reduce((s, i) => s + i.quantity, 0)} ly • Tổng:{" "}
+                    <strong className="text-amber-300">{formatVND(order.totalAmount)}</strong>
+                  </div>
+
+                  <div className="space-y-1.5 pt-1">
+                    {order.orderType !== "TAKEAWAY" && (
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateStatus(order.id, "DELIVERING")}
+                        className="w-full bg-orange-600 hover:bg-orange-500 text-white font-extrabold text-xs py-2 px-3 rounded-lg transition-all shadow flex items-center justify-center gap-1.5"
+                      >
+                        <Truck className="w-4 h-4" />
+                        <span>Bàn giao Shipper (Đang giao) &rarr;</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateStatus(order.id, "COMPLETED")}
+                      className={`w-full font-extrabold text-xs py-2 px-3 rounded-lg transition-all shadow flex items-center justify-center gap-1.5 ${
+                        order.orderType === "TAKEAWAY"
+                          ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                          : "bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700"
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>
+                        {order.orderType === "TAKEAWAY"
+                          ? "Khách đã lấy tại quầy (Hoàn tất)"
+                          : "Xác nhận Khách đã nhận (Hoàn tất)"}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* COLUMN 4: ĐANG GIAO (DELIVERING) */}
         <div className="flex flex-col bg-stone-950/80 rounded-2xl border border-stone-800 overflow-hidden">
           <div className="bg-orange-500/10 border-b border-orange-500/20 px-4 py-2.5 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-orange-400 animate-pulse" />
               <h2 className="text-sm font-bold text-orange-300 flex items-center gap-1.5">
                 <Truck className="w-4 h-4 text-orange-400" />
-                <span>3. ĐANG GIAO</span>
+                <span>4. ĐANG GIAO HÀNG</span>
               </h2>
             </div>
             <span className="bg-orange-500 text-black text-xs font-black px-2 py-0.5 rounded-full">
@@ -567,98 +694,40 @@ export default function KdsPage() {
                     </div>
                     <div className="text-stone-400 flex items-center gap-1 text-[11px]">
                       <Building className="w-3 h-3 text-orange-400 shrink-0" />
-                      <span>{[order.floorRoom, order.buildingName, order.companyName].filter(Boolean).join(" - ") || order.deliveryAddress || "Địa chỉ khách"}</span>
+                      <span>
+                        {[order.floorRoom, order.buildingName, order.companyName].filter(Boolean).join(" - ") ||
+                          order.deliveryAddress ||
+                          "Địa chỉ khách"}
+                      </span>
                     </div>
                     {order.shipperName && (
                       <div className="bg-stone-950 p-2 rounded text-[11px] border border-stone-800 text-stone-300">
-                        <div>Tài xế: <strong className="text-orange-300">{order.shipperName}</strong> {order.shipperPhone && `(${order.shipperPhone})`}</div>
-                        {order.estimatedDeliveryTime && <div className="text-stone-400">ETA: {order.estimatedDeliveryTime}</div>}
+                        <div>
+                          Tài xế: <strong className="text-orange-300">{order.shipperName}</strong>{" "}
+                          {order.shipperPhone && `(${order.shipperPhone})`}
+                        </div>
+                        {order.estimatedDeliveryTime && (
+                          <div className="text-stone-400">ETA: {order.estimatedDeliveryTime}</div>
+                        )}
                       </div>
                     )}
                   </div>
 
                   <div className="text-[11px] text-stone-400 bg-stone-950/50 p-2 rounded border border-stone-800/80">
-                    {order.items.length} món • Tổng: <strong className="text-amber-300">{formatVND(order.totalAmount)}</strong>
+                    {order.items.reduce((s, i) => s + i.quantity, 0)} ly • Tổng:{" "}
+                    <strong className="text-amber-300">{formatVND(order.totalAmount)}</strong>
                   </div>
 
                   <div className="space-y-1.5 pt-1">
                     <button
                       type="button"
-                      onClick={() => handleUpdateStatus(order.id, "READY")}
-                      className="w-full bg-teal-600 hover:bg-teal-500 text-white font-extrabold text-xs py-2 px-3 rounded-lg shadow transition-all flex items-center justify-center gap-1"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Đã đến nơi • Sẵn sàng giao &rarr;</span>
-                    </button>
-
-                    <button
-                      type="button"
                       onClick={() => handleUpdateStatus(order.id, "COMPLETED")}
-                      className="w-full bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold text-[11px] py-1.5 rounded-lg transition-colors border border-stone-700"
+                      className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs py-2 px-3 rounded-lg shadow transition-all flex items-center justify-center gap-1.5"
                     >
-                      Khách đã nhận (Hoàn tất)
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Xác nhận Giao thành công (Hoàn tất)</span>
                     </button>
                   </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* COLUMN 4: SẴN SÀNG GIAO */}
-        <div className="flex flex-col bg-stone-950/80 rounded-2xl border border-stone-800 overflow-hidden">
-          <div className="bg-emerald-500/10 border-b border-emerald-500/20 px-4 py-2.5 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-              <h2 className="text-sm font-bold text-emerald-300 flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>4. SẴN SÀNG GIAO</span>
-              </h2>
-            </div>
-            <span className="bg-emerald-500 text-black text-xs font-black px-2 py-0.5 rounded-full">
-              {readyOrders.length}
-            </span>
-          </div>
-
-          <div className="p-3 space-y-3 flex-1 overflow-y-auto">
-            {readyOrders.length === 0 ? (
-              <p className="text-center text-xs text-stone-500 py-10">Chưa có đơn chờ giao</p>
-            ) : (
-              readyOrders.map((order) => (
-                <div
-                  key={order.id}
-                  className="bg-stone-900 rounded-xl p-3.5 border border-emerald-500/40 shadow space-y-2.5"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-base font-black text-emerald-300">
-                      #{order.orderCode}
-                    </span>
-                    <span className="text-[11px] font-bold text-emerald-300 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
-                      {order.orderType === "TAKEAWAY" ? "Chờ khách lấy" : "Sẵn sàng giao"}
-                    </span>
-                  </div>
-
-                  <div className="text-xs text-stone-300 space-y-0.5">
-                    <div>
-                      <strong className="text-white text-sm">{order.recipientName}</strong> • {order.recipientPhone}
-                    </div>
-                    <div className="text-stone-400 text-[11px]">
-                      {[order.floorRoom, order.buildingName, order.companyName].filter(Boolean).join(" - ") || "Tại quầy Cà Xòi"}
-                    </div>
-                  </div>
-
-                  <div className="text-[11px] text-stone-400 bg-stone-950/50 p-2 rounded border border-stone-800">
-                    {order.items.length} món • Tổng: <strong className="text-amber-300">{formatVND(order.totalAmount)}</strong>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleUpdateStatus(order.id, "COMPLETED")}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs py-2 px-3 rounded-lg transition-all shadow flex items-center justify-center gap-1.5"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Xác nhận Khách đã nhận (Hoàn tất)</span>
-                  </button>
                 </div>
               ))
             )}
@@ -668,15 +737,21 @@ export default function KdsPage() {
 
       {/* PRINT CUP STICKERS MODAL */}
       {activePrintOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-stone-900 border border-stone-700 rounded-3xl max-w-2xl w-full p-5 space-y-4 max-h-[90vh] flex flex-col">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          onClick={() => setActivePrintOrder(null)}
+        >
+          <div
+            className="bg-stone-900 border border-stone-700 rounded-3xl max-w-2xl w-full p-5 space-y-4 max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-stone-800 pb-2">
               <div>
                 <h3 className="font-bold text-white text-base">
                   In Tem Dán Ly (Cup Labels) - Đơn #{activePrintOrder.orderCode}
                 </h3>
                 <p className="text-xs text-stone-400">
-                  Khổ tiêu chuẩn 50x30mm • In dán lên từng cốc trước khi giao cho khách
+                  Khổ tiêu chuẩn 50x30mm • Tự động tách riêng từng ly theo số lượng đặt
                 </p>
               </div>
               <button
@@ -688,17 +763,29 @@ export default function KdsPage() {
               </button>
             </div>
 
-            {/* Sticker Preview Grid */}
-            <div className="flex-1 overflow-y-auto p-2 grid grid-cols-1 sm:grid-cols-2 gap-4 justify-items-center">
-              {activePrintOrder.items.map((item, idx) => (
-                <CupStickerPreview
-                  key={idx}
-                  orderCode={activePrintOrder.orderCode}
-                  item={item}
-                  createdAt={activePrintOrder.createdAt}
-                  onPrint={() => window.print()}
-                />
-              ))}
+            {/* Sticker Preview Grid (printable-area ensures window.print prints actual stickers!) */}
+            <div className="printable-area flex-1 overflow-y-auto p-2 grid grid-cols-1 sm:grid-cols-2 gap-4 justify-items-center">
+              {activePrintOrder.items.flatMap((item, idx) =>
+                Array.from({ length: Math.max(1, item.quantity) }).map((_, cupIdx) => (
+                  <div key={`${item.id || idx}-${cupIdx}`} className="break-inside-avoid">
+                    <CupStickerPreview
+                      orderCode={activePrintOrder.orderCode}
+                      item={{
+                        ...item,
+                        quantity: 1,
+                        recipientLabel:
+                          item.quantity > 1 && item.recipientLabel
+                            ? `${item.recipientLabel} (${cupIdx + 1}/${item.quantity})`
+                            : item.quantity > 1
+                            ? `Ly ${cupIdx + 1}/${item.quantity}`
+                            : item.recipientLabel,
+                      }}
+                      createdAt={activePrintOrder.createdAt}
+                      onPrint={() => window.print()}
+                    />
+                  </div>
+                ))
+              )}
             </div>
 
             <div className="border-t border-stone-800 pt-3 flex items-center justify-between">

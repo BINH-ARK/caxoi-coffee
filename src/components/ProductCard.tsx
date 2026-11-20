@@ -26,9 +26,10 @@ export default function ProductCard({ product, onSelect }: ProductCardProps) {
         {/* Product Image & Badges */}
         <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-coffee-50 mb-3">
           <Image
-            src={product.imageUrl}
+            src={product.imageUrl || "/images/ca-xoi-logo.jpg"}
             alt={product.name}
             fill
+            unoptimized
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
             className="object-cover group-hover:scale-105 transition-transform duration-300"
           />

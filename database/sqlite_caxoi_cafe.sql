@@ -140,15 +140,16 @@ CREATE TABLE users (
     email TEXT,
     role_id INTEGER NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1,
+    token_version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
 );
 
-INSERT INTO users (id, username, password_hash, plain_password, pin, full_name, phone, email, role_id, is_active) VALUES
-('a0000000-0000-0000-0000-000000000001', 'admin', '$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO', 'Admin@123456', '9999', 'Quản Trị Viên (Chủ Quán)', '0905249733', NULL, 1, 1),
-('a0000000-0000-0000-0000-000000000002', 'manager', '$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO', 'Manager@123', '2048', 'Quản Lý Cửa Hàng', '0905112233', NULL, 2, 1),
-('a0000000-0000-0000-0000-000000000003', 'barista1', '$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO', 'Barista@123', '8823', 'Nguyễn Văn Barista', '0905667788', NULL, 3, 1),
-('a0000000-0000-0000-0000-000000000004', 'cashier1', '$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO', 'Cashier@123', '6688', 'Trần Thu Ngân', '0905889900', NULL, 4, 1);
+INSERT INTO users (id, username, password_hash, plain_password, pin, full_name, phone, email, role_id, is_active, token_version) VALUES
+('a0000000-0000-0000-0000-000000000001', 'admin', '$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO', 'Admin@123456', NULL, 'Quản Trị Viên (Chủ Quán)', '0905249733', NULL, 1, 1, 1),
+('a0000000-0000-0000-0000-000000000002', 'manager', '$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO', 'Manager@123', NULL, 'Quản Lý Cửa Hàng', '0905112233', NULL, 2, 1, 1),
+('a0000000-0000-0000-0000-000000000003', 'barista1', '$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO', 'Barista@123', '8823', 'Nguyễn Văn Barista', '0905667788', NULL, 3, 1, 1),
+('a0000000-0000-0000-0000-000000000004', 'cashier1', '$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO', 'Cashier@123', '6688', 'Trần Thu Ngân', '0905889900', NULL, 4, 1, 1);
 
 -- ----------------------------------------------------------------------------
 -- 5. BẢNG DANH MỤC SẢN PHẨM (CATEGORIES)
@@ -283,6 +284,7 @@ CREATE TABLE business_settings (
     address TEXT,
     open_time TEXT,
     close_time TEXT,
+    shipping_fee_mode TEXT NOT NULL DEFAULT 'AUTO',
     base_delivery_fee REAL NOT NULL DEFAULT 15000,
     free_delivery_min_cups INTEGER NOT NULL DEFAULT 3,
     max_slot_capacity_cups INTEGER NOT NULL DEFAULT 30,
@@ -407,13 +409,18 @@ CREATE TABLE promotions (
     discount_type TEXT NOT NULL,
     discount_value REAL NOT NULL,
     min_order_amount REAL NOT NULL DEFAULT 0,
-    is_active INTEGER NOT NULL DEFAULT 1
+    is_active INTEGER NOT NULL DEFAULT 1,
+    max_discount_amount REAL DEFAULT NULL,
+    usage_limit INTEGER DEFAULT NULL,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    start_time TEXT DEFAULT NULL,
+    end_time TEXT DEFAULT NULL
 );
 
-INSERT INTO promotions (id, code, name, discount_type, discount_value, min_order_amount, is_active) VALUES
-(1, 'CHAOBANMOI', 'Giảm 20% đơn đầu tiên cho dân văn phòng', 'PERCENTAGE', 20.00, 50000, 1),
-(2, 'OFFICE50K', 'Giảm 50.000đ khi gom đơn cả phòng từ 200k', 'FIXED', 50000, 200000, 1),
-(3, 'FREESHIP', 'Freeship siêu tốc toàn quận Hải Châu, Thanh Khê', 'FIXED', 15000, 80000, 1);
+INSERT INTO promotions (id, code, name, discount_type, discount_value, min_order_amount, is_active, max_discount_amount) VALUES
+(1, 'CHAOBANMOI', 'Giảm 20% đơn đầu tiên cho dân văn phòng', 'PERCENTAGE', 20.00, 50000, 1, 30000),
+(2, 'OFFICE50K', 'Giảm 50.000đ khi gom đơn cả phòng từ 200k', 'FIXED', 50000, 200000, 1, NULL),
+(3, 'FREESHIP', 'Freeship siêu tốc toàn quận Hải Châu, Thanh Khê', 'FREESHIP', 15000, 80000, 1, NULL);
 
 -- ----------------------------------------------------------------------------
 -- 12. BẢNG PHÒNG ĐẶT NHÓM CÔNG SỞ (GROUP_SESSIONS & GROUP_SESSION_ITEMS)
@@ -423,6 +430,7 @@ CREATE TABLE group_sessions (
     session_code TEXT NOT NULL UNIQUE,
     host_name TEXT NOT NULL,
     host_phone TEXT NOT NULL,
+    host_token TEXT,
     building_name TEXT,
     status TEXT NOT NULL DEFAULT 'OPEN',
     expires_at TEXT NOT NULL,
@@ -447,7 +455,7 @@ CREATE TABLE group_session_items (
 );
 
 -- ----------------------------------------------------------------------------
--- 13. BẢNG ĐƠN HÀNG (ORDERS) & CHI TIẾT ĐƠN (ORDER_ITEMS)
+-- 13. BẢNG ĐƠN HÀNG (ORDERS), CHI TIẾT ĐƠN & GIAO DỊCH WEBHOOK
 -- ----------------------------------------------------------------------------
 CREATE TABLE orders (
     id TEXT PRIMARY KEY,
@@ -472,6 +480,11 @@ CREATE TABLE orders (
     promotion_code TEXT,
     group_session_id TEXT,
     barista_notes TEXT,
+    shipper_name TEXT,
+    shipper_phone TEXT,
+    estimated_delivery_time TEXT,
+    tracking_notes TEXT,
+    tracking_token TEXT,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
@@ -489,5 +502,14 @@ CREATE TABLE order_items (
     item_notes TEXT,
     selected_options_json TEXT,
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+);
+
+CREATE TABLE webhook_transactions (
+    tx_id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    order_code TEXT NOT NULL,
+    amount REAL NOT NULL,
+    gateway TEXT,
+    processed_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 

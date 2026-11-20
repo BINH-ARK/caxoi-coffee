@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Lock, Phone, MapPin, Coffee, ShieldCheck } from "lucide-react";
-import { XANH_SM_ONELINK, getTelHref } from "@/lib/utils";
+import { XANH_SM_ONELINK, getTelHref, sanitizeExternalUrl } from "@/lib/utils";
 import { useBusinessSettings } from "@/lib/useBusinessSettings";
 
 export default function CustomerFooter() {
@@ -51,7 +51,7 @@ export default function CustomerFooter() {
           {/* Contact & Hours */}
           <div className="flex flex-col sm:flex-row items-center gap-2.5 text-coffee-700 font-semibold shrink-0">
             <a
-              href={settings.xanhSmUrl || XANH_SM_ONELINK}
+              href={sanitizeExternalUrl(settings.xanhSmUrl, XANH_SM_ONELINK)}
               target="_blank"
               rel="noopener noreferrer"
               className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 px-3.5 py-1.5 rounded-xl transition-colors flex items-center gap-1.5 shadow-sm"

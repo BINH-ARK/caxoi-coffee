@@ -29,10 +29,14 @@ yarn-error.log*
 .env
 .env*.local
 
-# SQLite WAL and temporary files
+# SQLite WAL, temporary files, and local backups
 *.db-journal
 *.db-wal
 *.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+database/backups/
 
 # TypeScript
 *.tsbuildinfo

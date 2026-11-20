@@ -3,16 +3,21 @@ import fs from "fs";
 import path from "path";
 import {
   exportFullDatabaseToJson,
+  exportLiveSqlDumpFromSqlite,
   createDatabaseBackupSnapshot,
-  getSqliteDb,
+  checkpointSqliteForDownload,
 } from "@/lib/sqlite";
+import { requireStaffAuth } from "@/lib/serverAuth";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET: Tải tệp sao lưu trực tiếp về máy tính (JSON / SQLite DB / SQL Script)
+ * GET: Tải tệp sao lưu trực tiếp về máy tính (JSON / SQLite DB / Live SQL Dump)
  */
 export async function GET(request: Request) {
+  const auth = await requireStaffAuth(request, { roles: ["SUPER_ADMIN"] });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(request.url);
     const format = (searchParams.get("format") || "json").toLowerCase();
@@ -34,22 +39,19 @@ export async function GET(request: Request) {
         headers: {
           "Content-Type": "application/json; charset=utf-8",
           "Content-Disposition": `attachment; filename="${filename}"`,
+          "Cache-Control": "no-store",
         },
       });
     }
 
-    // 2. Tải file SQLite (.db)
+    // 2. Tải file SQLite (.db) sau khi WAL checkpoint
     if (format === "db" || format === "sqlite") {
+      checkpointSqliteForDownload();
+
       const targetDb = path.join(dbDir, "caxoi_cafe.db");
       if (!fs.existsSync(targetDb)) {
         return NextResponse.json({ success: false, message: "File database không tồn tại" }, { status: 404 });
       }
-
-      // Checkpoint WAL để file .db chứa 100% dữ liệu mới nhất
-      try {
-        const db = getSqliteDb();
-        db.pragma("wal_checkpoint(TRUNCATE)");
-      } catch {}
 
       const fileBuffer = fs.readFileSync(targetDb);
       const filename = `caxoi_cafe_backup_${dateStr}.db`;
@@ -60,25 +62,22 @@ export async function GET(request: Request) {
           "Content-Type": "application/x-sqlite3",
           "Content-Disposition": `attachment; filename="${filename}"`,
           "Content-Length": fileBuffer.length.toString(),
+          "Cache-Control": "no-store",
         },
       });
     }
 
-    // 3. Tải file SQL Script (.sql)
+    // 3. Tải file SQL Dump TỪ DỮ LIỆU THỰC TẾ trong SQLite (không dùng file seed tĩnh)
     if (format === "sql") {
-      const targetSql = path.join(dbDir, "sqlite_caxoi_cafe.sql");
-      if (!fs.existsSync(targetSql)) {
-        return NextResponse.json({ success: false, message: "File script SQL không tồn tại" }, { status: 404 });
-      }
-
-      const fileContent = fs.readFileSync(targetSql, "utf-8");
+      const liveSql = exportLiveSqlDumpFromSqlite();
       const filename = `caxoi_cafe_backup_${dateStr}.sql`;
 
-      return new NextResponse(fileContent, {
+      return new NextResponse(liveSql, {
         status: 200,
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           "Content-Disposition": `attachment; filename="${filename}"`,
+          "Cache-Control": "no-store",
         },
       });
     }
@@ -99,11 +98,16 @@ export async function GET(request: Request) {
  * POST: Tạo một bản snapshot lưu trữ an toàn trên server
  */
 export async function POST(request: Request) {
+  const auth = await requireStaffAuth(request, { roles: ["SUPER_ADMIN"] });
+  if (!auth.ok) return auth.response;
+
   try {
     let label = "manual";
     try {
       const body = await request.json();
-      if (body?.label) label = body.label;
+      if (typeof body?.label === "string" && body.label.trim()) {
+        label = body.label.trim().slice(0, 40);
+      }
     } catch {}
 
     const result = await createDatabaseBackupSnapshot(label);

@@ -41,6 +41,7 @@ import {
   XANH_SM_ONELINK,
   getQrImageSrc,
   getTelHref,
+  sanitizeExternalUrl,
 } from "@/lib/utils";
 
 export default function HomePage() {
@@ -60,7 +61,7 @@ export default function HomePage() {
   const [menuViewMode, setMenuViewMode] = useState<"BOARD" | "GRID">("BOARD");
   const [lyToastMsg, setLyToastMsg] = useState<string | null>(null);
 
-  // Multi-purpose lookup for re-order (Phone / Name / Order Code)
+  // Lookup for re-order (Phone or Order Code)
   const [lookupPhone, setLookupPhone] = useState("");
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [recentOrderMsg, setRecentOrderMsg] = useState<string | null>(null);
@@ -98,10 +99,11 @@ export default function HomePage() {
 
     // 1. Tự động đồng bộ ngay khi người dùng chuyển lại tab Trang Khách từ tab Admin
     const handleFocus = () => fetchMenu();
-    window.addEventListener("focus", handleFocus);
-    window.addEventListener("visibilitychange", () => {
+    const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") fetchMenu();
-    });
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     // 2. Nhận tín hiệu cập nhật thời gian thực từ tab Admin qua LocalStorage event
     const handleStorage = (e: StorageEvent) => {
@@ -116,6 +118,7 @@ export default function HomePage() {
 
     return () => {
       window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("storage", handleStorage);
       clearInterval(interval);
     };
@@ -163,32 +166,28 @@ export default function HomePage() {
     setFoundOrder(null);
 
     try {
-      // Tự động nhận diện: Nếu là chuỗi số thuần thì thử tìm theo phone trước, nếu không thì tìm theo search tổng hợp
-      const isPhone = /^[0-9+]+$/.test(q);
+      const cleanDigits = q.replace(/[\s.-]/g, "");
+      const isPhone = /^0?\d{9,11}$/.test(cleanDigits);
+      const cleanCode = q.replace(/^#/, "").trim();
       const url = isPhone
-        ? `/api/orders?phone=${encodeURIComponent(q)}`
-        : `/api/orders?search=${encodeURIComponent(q)}`;
+        ? `/api/orders?phone=${encodeURIComponent(cleanDigits)}`
+        : `/api/orders?orderCode=${encodeURIComponent(cleanCode)}`;
 
-      let res = await fetch(url);
-      let data = await res.json();
-
-      // Nếu tìm theo phone mà không thấy, fallback sang tìm theo search tổng hợp
-      if ((!data.success || !data.data || data.data.length === 0) && isPhone) {
-        res = await fetch(`/api/orders?search=${encodeURIComponent(q)}`);
-        data = await res.json();
-      }
+      const res = await fetch(url);
+      const data = await res.json();
 
       if (data.success && Array.isArray(data.data) && data.data.length > 0) {
         const latest: Order = data.data[0];
         setFoundOrder(latest);
         setRecentOrderMsg(null);
         try {
-          localStorage.setItem("caxoi_customer_lookup", q);
+          localStorage.setItem("caxoi_customer_lookup", isPhone ? cleanDigits : cleanCode);
         } catch {}
       } else {
         setFoundOrder(null);
         setRecentOrderMsg(
-          `Không tìm thấy đơn hàng nào khớp với "${q}". Bạn có thể thử tìm theo Số điện thoại, Tên người nhận hoặc Mã đơn (#CF...).`
+          data.message ||
+            `Không tìm thấy đơn hàng nào khớp với "${q}". Vui lòng nhập chính xác Số điện thoại (9–11 số) hoặc Mã đơn (VD: CF2611-001).`
         );
       }
     } catch {
@@ -204,54 +203,76 @@ export default function HomePage() {
     setIsReordering(true);
 
     try {
+      let addedCount = 0;
+      const skippedNames: string[] = [];
+
       foundOrder.items.forEach((item, idx) => {
-        // Tìm sản phẩm khớp từ danh sách menu
-        const matchedProduct: Product = products.find((p) => p.id === item.productId) || {
-          id: item.productId,
-          name: item.productName,
-          slug: item.productId,
-          categoryId: 1,
-          description: "",
-          basePrice: item.unitPrice,
-          imageUrl: "/images/ca-phe-den.jpg",
-          isAvailable: true,
-          isFeatured: false,
-          prepTimeMinutes: 5,
-          tags: [],
-          variants: [],
-        };
+        const matchedProduct = products.find((p) => p.id === item.productId);
+        if (!matchedProduct || !matchedProduct.isAvailable) {
+          skippedNames.push(item.productName);
+          return;
+        }
 
-        // Tìm variant khớp
-        const matchedVariant: ProductVariant = matchedProduct.variants.find(
-          (v) => v.sizeName === item.variantName
-        ) || {
-          id: idx + 1,
-          productId: matchedProduct.id,
-          sizeName: item.variantName || "Chuẩn",
-          extraPrice: 0,
-          isDefault: true,
-        };
+        const matchedVariant: ProductVariant =
+          matchedProduct.variants.find(
+            (v) => v.sizeName.toLowerCase() === (item.variantName || "").toLowerCase()
+          ) ||
+          matchedProduct.variants.find((v) => v.isDefault) ||
+          matchedProduct.variants[0] || {
+            id: idx + 1,
+            productId: matchedProduct.id,
+            sizeName: item.variantName || "Chuẩn",
+            extraPrice: 0,
+            isDefault: true,
+          };
 
-        const selectedOptions = (item.options || []).map((o) => ({
-          optionName: o.optionName,
-          valueName: o.valueName,
-          extraPrice: o.price,
-        }));
+        // Tính lại đơn giá theo bảng giá & topping hiện tại của quán
+        const selectedOptions = (item.options || []).map((o) => {
+          const optGroup = options.find((g) => g.name === o.optionName);
+          const optVal = optGroup?.values.find((v) => v.name === o.valueName);
+          return {
+            optionName: o.optionName,
+            valueName: o.valueName,
+            extraPrice: optVal ? optVal.extraPrice : 0,
+          };
+        });
+
+        const basePrice = matchedProduct.salePrice ?? matchedProduct.basePrice;
+        const optionsExtra = selectedOptions.reduce((sum, o) => sum + o.extraPrice, 0);
+        const liveUnitPrice = basePrice + matchedVariant.extraPrice + optionsExtra;
+        const qty = Math.max(1, Math.min(50, item.quantity));
 
         const cartItem: CartItem = {
-          cartItemId: `reorder-${item.productId}-${Date.now()}-${idx}`,
-          product: matchedProduct,
+          cartItemId: `reorder-${matchedProduct.id}-${Date.now()}-${idx}`,
+          product: {
+            ...matchedProduct,
+            imageUrl: matchedProduct.imageUrl || "/images/ca-xoi-logo.jpg",
+          },
           variant: matchedVariant,
           selectedOptions,
-          quantity: item.quantity,
+          quantity: qty,
           recipientLabel: item.recipientLabel,
           notes: item.itemNotes,
-          unitPrice: item.unitPrice,
-          totalPrice: item.totalPrice,
+          unitPrice: liveUnitPrice,
+          totalPrice: liveUnitPrice * qty,
         };
 
         addToCart(cartItem);
+        addedCount++;
       });
+
+      if (addedCount === 0) {
+        setRecentOrderMsg(
+          "Rất tiếc, tất cả món trong đơn cũ hiện đang tạm hết hoặc không còn trong thực đơn."
+        );
+        return;
+      }
+
+      if (skippedNames.length > 0) {
+        alert(
+          `Đã bỏ qua ${skippedNames.length} món hiện đang tạm hết (${skippedNames.join(", ")}). Các món còn lại đã được thêm vào giỏ hàng theo giá hiện tại.`
+        );
+      }
 
       router.push("/cart");
     } catch (err) {
@@ -411,7 +432,7 @@ export default function HomePage() {
             {/* Dual QR Codes: Facebook Fanpage + Xòi chạy Xanh SM */}
             <div className="w-full max-w-[290px] grid grid-cols-2 gap-2.5 mt-3">
               <a
-                href={settings.facebookUrl || FACEBOOK_FANPAGE_URL}
+                href={sanitizeExternalUrl(settings.facebookUrl, FACEBOOK_FANPAGE_URL)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group bg-pink-50/75 hover:bg-blue-50/90 border border-pink-200/85 hover:border-blue-300 rounded-2xl p-2 flex flex-col items-center gap-1.5 transition-all hover:scale-[1.03] active:scale-95 shadow-sm"
@@ -438,7 +459,7 @@ export default function HomePage() {
               </a>
 
               <a
-                href={settings.xanhSmUrl || XANH_SM_ONELINK}
+                href={sanitizeExternalUrl(settings.xanhSmUrl, XANH_SM_ONELINK)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group bg-emerald-50/85 hover:bg-emerald-100/90 border border-emerald-200 hover:border-emerald-400 rounded-2xl p-2 flex flex-col items-center gap-1.5 transition-all hover:scale-[1.03] active:scale-95 shadow-sm"
@@ -569,14 +590,14 @@ export default function HomePage() {
             </div>
             <div>
               <span className="text-xs font-bold text-coffee-950 block">Khách quen đặt lại nhanh</span>
-              <span className="text-[10px] text-coffee-500 hidden sm:block">Tìm theo Tên, SĐT hoặc Mã đơn (#CF...)</span>
+              <span className="text-[10px] text-coffee-500 hidden sm:block">Tìm theo SĐT hoặc Mã đơn (CF...)</span>
             </div>
           </div>
           <div className="flex-1 flex items-center gap-2">
             <div className="relative flex-1">
               <input
                 type="text"
-                placeholder="Nhập Số điện thoại, Tên của bạn hoặc Mã đơn..."
+                placeholder="Nhập đúng Số điện thoại (VD: 0905...) hoặc Mã đơn (CF...)..."
                 value={lookupPhone}
                 onChange={(e) => setLookupPhone(e.target.value)}
                 className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-coffee-200 bg-stone-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-caramel/40 text-coffee-950 font-medium placeholder:text-stone-400 transition-all"
@@ -858,6 +879,7 @@ export default function HomePage() {
             <CaXoiMenuBoard
               products={products}
               activeCategoryId={activeCategoryId}
+              selectedTag={selectedTag}
               searchQuery={searchQuery}
               xanhSmUrl={settings.xanhSmUrl}
               onSelectProductVariant={(product, variantName) => {
@@ -959,25 +981,30 @@ export default function HomePage() {
       )}
 
       {/* Product Detail Customization Modal */}
-      <ProductDetailModal
-        product={selectedProduct}
-        options={options}
-        initialVariantName={selectedVariantName}
-        existingLyCount={lyCount}
-        onClose={() => {
-          setSelectedProduct(null);
-          setSelectedVariantName(undefined);
-        }}
-        onAddToCart={(item: CartItem) => {
-          addToCart(item);
-          if (item.variant.sizeName === "Ly" && lyCount + item.quantity < MIN_LY_ORDER) {
-            setLyToastMsg(MIN_LY_MESSAGE);
-            setTimeout(() => {
-              setLyToastMsg("");
-            }, 4000);
-          }
-        }}
-      />
+      {selectedProduct && (
+        <ProductDetailModal
+          product={selectedProduct}
+          options={options}
+          initialVariantName={selectedVariantName}
+          existingLyCount={lyCount}
+          onClose={() => {
+            setSelectedProduct(null);
+            setSelectedVariantName(undefined);
+          }}
+          onAddToCart={(item: CartItem) => {
+            addToCart(item);
+            if (
+              item.variant.sizeName.trim().toLowerCase() === "ly" &&
+              lyCount + item.quantity < MIN_LY_ORDER
+            ) {
+              setLyToastMsg(MIN_LY_MESSAGE);
+              setTimeout(() => {
+                setLyToastMsg("");
+              }, 4000);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

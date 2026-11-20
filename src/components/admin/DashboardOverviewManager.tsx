@@ -281,7 +281,7 @@ export default function DashboardOverviewManager({
               {stats?.totalOrders || 0} <span className="text-sm font-bold text-coffee-600">đơn</span>
             </div>
             <div className="text-[11px] text-blue-600 font-bold mt-1">
-              Tỷ lệ hoàn thành: {stats?.completionRate || 100}%
+              Tỷ lệ hoàn thành: {stats?.completionRate ?? 0}%
             </div>
           </div>
           <div className="text-[10px] text-coffee-500 pt-2 border-t border-coffee-100/60 flex items-center justify-between">
@@ -405,8 +405,8 @@ export default function DashboardOverviewManager({
                 </div>
               )}
 
-              {/* Dãy các cột từ 07:00 đến 22:00 */}
-              <div className="grid grid-cols-8 sm:grid-cols-16 gap-1.5 sm:gap-1 items-end h-56 pt-8 pb-2 px-1 bg-gradient-to-b from-[#FDFBF7] to-white rounded-2xl border border-coffee-100/70">
+              {/* Dãy 16 cột từ 07:00 đến 22:00 */}
+              <div className="grid grid-cols-8 sm:grid-cols-[repeat(16,minmax(0,1fr))] gap-1.5 sm:gap-1 items-end h-56 pt-8 pb-2 px-1 bg-gradient-to-b from-[#FDFBF7] to-white rounded-2xl border border-coffee-100/70">
                 {stats?.hourlyDistribution &&
                   stats.hourlyDistribution.map((item: any) => {
                     const maxOrders = Math.max(stats.maxHourlyCount || 1, 1);
@@ -547,6 +547,7 @@ export default function DashboardOverviewManager({
                             src={p.imageUrl}
                             alt={p.name}
                             fill
+                            unoptimized
                             className="object-cover"
                             sizes="44px"
                           />
@@ -711,13 +712,13 @@ export default function DashboardOverviewManager({
               <span className="text-[10px] text-amber-600">Quầy Barista</span>
             </div>
 
-            {/* Bước 3: Đang giao */}
+            {/* Bước 3: Sẵn sàng / Đang giao */}
             <div className="p-3 rounded-2xl bg-orange-50/60 border border-orange-100">
-              <span className="text-[10px] font-bold text-orange-700 block uppercase">Đang giao</span>
+              <span className="text-[10px] font-bold text-orange-700 block uppercase">Sẵn sàng / Giao</span>
               <span className="text-xl font-black text-orange-900 block mt-1">
                 {stats?.readyCount || 0}
               </span>
-              <span className="text-[10px] text-orange-600">Shipper / Bàn</span>
+              <span className="text-[10px] text-orange-600">Shipper / Quầy</span>
             </div>
 
             {/* Bước 4: Hoàn thành */}
@@ -731,8 +732,18 @@ export default function DashboardOverviewManager({
           </div>
 
           <div className="p-3 rounded-2xl bg-coffee-50/60 border border-coffee-100 flex items-center justify-between text-xs text-coffee-600">
-            <span>Đơn đã hủy trong kỳ: <strong className="text-rose-600">{stats?.cancelledCount || 0} đơn</strong></span>
-            <span className="text-[11px] font-bold text-emerald-700">Tỷ lệ hủy: {stats?.totalOrders > 0 ? ((stats.cancelledCount || 0) / (stats.totalOrders + (stats.cancelledCount || 0)) * 100).toFixed(1) : 0}%</span>
+            <span>
+              Đơn đã hủy trong kỳ:{" "}
+              <strong className="text-rose-600">{stats?.cancelledCount || 0} đơn</strong>
+            </span>
+            <span className="text-[11px] font-bold text-emerald-700">
+              Tỷ lệ hủy:{" "}
+              {(() => {
+                const denom = (stats?.totalOrders || 0) + (stats?.cancelledCount || 0);
+                return denom > 0 ? (((stats?.cancelledCount || 0) / denom) * 100).toFixed(1) : "0.0";
+              })()}
+              %
+            </span>
           </div>
         </div>
       </div>

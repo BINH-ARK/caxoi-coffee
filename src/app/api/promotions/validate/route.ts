@@ -15,10 +15,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const orderAmount = Number(subtotalAmount) || 0;
-    const shipFee = Number(deliveryFee) || 0;
+    const orderAmount = Math.max(0, Number(subtotalAmount) || 0);
+    const shipFee = Math.max(0, Number(deliveryFee) || 0);
 
-    const promotion = getPromotionByCodeFromSqlite(code.trim());
+    const promotion = getPromotionByCodeFromSqlite(code.trim().slice(0, 40));
     if (!promotion) {
       return NextResponse.json(
         { valid: false, message: `Mã giảm giá "${code.trim().toUpperCase()}" không hợp lệ hoặc không tồn tại.` },
@@ -49,9 +49,10 @@ export async function POST(request: Request) {
       discountAmount: calculation.discountAmount,
       message: `Đã áp dụng mã "${promotion.code}": Giảm ${new Intl.NumberFormat("vi-VN").format(calculation.discountAmount)}đ`,
     });
-  } catch (error: any) {
+  } catch (error) {
+    console.error("[Promotions Validate Error]", error);
     return NextResponse.json(
-      { valid: false, message: error.message || "Lỗi xử lý mã giảm giá" },
+      { valid: false, message: "Lỗi xử lý mã giảm giá." },
       { status: 500 }
     );
   }

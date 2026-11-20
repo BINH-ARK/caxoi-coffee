@@ -18,7 +18,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { Order, OrderStatus, BusinessSettings } from "@/types";
-import { formatVND, generateVietQrUrl } from "@/lib/utils";
+import { formatVND, generateVietQrUrl, getTelHref } from "@/lib/utils";
 import { getBankById } from "@/lib/vietqr";
 
 const STATUS_STEPS: { key: OrderStatus; label: string; desc: string }[] = [
@@ -35,25 +35,62 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
   const [order, setOrder] = useState<Order | null>(null);
   const [settings, setSettings] = useState<BusinessSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSimulatingPayment, setIsSimulatingPayment] = useState(false);
-  const [simMessage, setSimMessage] = useState("");
+  const [trackingToken, setTrackingToken] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
 
-  // Poll order status every 4 seconds
+  // Đọc trackingToken từ URL (?token=...) hoặc sessionStorage khi khách vừa đặt xong
+  useEffect(() => {
+    try {
+      const urlToken =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("token") || ""
+          : "";
+      const storedToken = sessionStorage.getItem(`order_token_${id}`) || "";
+      const resolved = urlToken || storedToken;
+      if (resolved) {
+        setTrackingToken(resolved);
+        sessionStorage.setItem(`order_token_${id}`, resolved);
+      }
+    } catch {}
+  }, [id]);
+
+  // Poll order status every 4 seconds; tự động dừng khi COMPLETED hoặc CANCELLED
   useEffect(() => {
     let isMounted = true;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const getQueryString = () => {
+      try {
+        const token = trackingToken || sessionStorage.getItem(`order_token_${id}`) || "";
+        const savedPhone = localStorage.getItem("caxoi_customer_phone") || "";
+        const qs = new URLSearchParams();
+        if (token) qs.set("token", token);
+        else if (savedPhone) qs.set("phone", savedPhone);
+        const s = qs.toString();
+        return s ? `?${s}` : "";
+      } catch {
+        return "";
+      }
+    };
 
     const fetchOrder = () => {
-      fetch(`/api/orders/${id}`)
+      fetch(`/api/orders/${encodeURIComponent(id)}${getQueryString()}`, { cache: "no-store" })
         .then((res) => res.json())
         .then((data) => {
           if (isMounted && data.success) {
             setOrder(data.data);
             if (data.settings) {
               setSettings(data.settings);
+            }
+            if (
+              (data.data?.status === "COMPLETED" || data.data?.status === "CANCELLED") &&
+              intervalId
+            ) {
+              clearInterval(intervalId);
+              intervalId = null;
             }
           }
         })
@@ -64,50 +101,12 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
     };
 
     fetchOrder();
-    const interval = setInterval(fetchOrder, 4000);
+    intervalId = setInterval(fetchOrder, 4000);
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      if (intervalId) clearInterval(intervalId);
     };
-  }, [id]);
-
-  // Simulate payment webhook call
-  const handleSimulateWebhook = async () => {
-    if (!order) return;
-    setIsSimulatingPayment(true);
-    setSimMessage("");
-
-    const currentBankId = settings?.vietqrBankId || "MB";
-    const currentAccountNo = settings?.vietqrAccountNo || "999988886666";
-
-    try {
-      const res = await fetch("/api/payments/webhook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gateway: currentBankId,
-          content: `${order.orderCode} NGUYEN VAN A CHUYEN KHOAN`,
-          transferAmount: order.totalAmount,
-          accountNumber: currentAccountNo,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setSimMessage("Thanh toán đối soát thành công! Đơn hàng đã chuyển sang quầy pha chế.");
-        // Re-fetch order
-        const orderRes = await fetch(`/api/orders/${id}`);
-        const orderData = await orderRes.json();
-        if (orderData.success) setOrder(orderData.data);
-      } else {
-        setSimMessage(data.message || "Không thể đối soát");
-      }
-    } catch {
-      setSimMessage("Lỗi kết nối webhook");
-    } finally {
-      setIsSimulatingPayment(false);
-    }
-  };
+  }, [id, trackingToken]);
 
   const handleCopyContent = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -120,10 +119,15 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
     setIsCancelling(true);
     setCancelError("");
     try {
-      const res = await fetch(
-        `/api/orders/${order.orderCode}?reason=${encodeURIComponent("Khách hàng đã hủy đơn")}`,
-        { method: "DELETE" }
-      );
+      const qs = new URLSearchParams({ reason: "Khách hàng đã hủy đơn" });
+      const token = trackingToken || sessionStorage.getItem(`order_token_${order.orderCode}`) || "";
+      const savedPhone = localStorage.getItem("caxoi_customer_phone") || "";
+      if (token) qs.set("token", token);
+      else if (savedPhone) qs.set("phone", savedPhone);
+
+      const res = await fetch(`/api/orders/${encodeURIComponent(order.orderCode)}?${qs.toString()}`, {
+        method: "DELETE",
+      });
       const data = await res.json();
       if (data.success) {
         setOrder((prev) =>
@@ -291,7 +295,7 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
                     </span>
                   </h3>
                   <p className="text-coffee-700 text-[11px] sm:text-xs leading-relaxed pt-0.5">
-                    Quý khách vui lòng <strong>quét mã VietQR bên dưới</strong> để hoàn tất thanh toán. Quán Cà Xòi sẽ tự động nhận đơn và Barista bắt đầu pha chế đồ uống ngay khi tiền về tài khoản!
+                    Quý khách vui lòng <strong>quét mã VietQR bên dưới</strong> để hoàn tất thanh toán. Quán Cà Xòi sẽ tự động đối soát qua ngân hàng hoặc Thu ngân xác nhận ngay khi nhận được tiền!
                   </p>
                 </div>
               </div>
@@ -311,7 +315,6 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
             <div className="grid grid-cols-5 gap-2 relative">
               {STATUS_STEPS.slice(1, 6).map((step, idx) => {
                 const stepNum = idx + 1;
-                // If order is still pending payment, NO preparation step is active yet
                 const currentStepNum = isPendingPayment ? 0 : statusOrderIndex >= 1 ? statusOrderIndex : 0;
                 const isCompleted = currentStepNum >= stepNum;
                 const isCurrent = currentStepNum === stepNum;
@@ -435,30 +438,24 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
             </div>
           </div>
 
-          {/* SIMULATION TEST BUTTON FOR USER & TESTERS */}
-          <div className="pt-3 border-t border-amber-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/70 p-3 rounded-2xl">
-            <div>
-              <span className="text-xs font-bold text-coffee-800">
-                Dành cho kiểm thử hệ thống:
+          {/* Real Bank Verification Notice (No client-side simulation button) */}
+          <div className="pt-3 border-t border-amber-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 bg-white/80 p-3.5 rounded-2xl">
+            <div className="space-y-0.5 text-left">
+              <span className="text-xs font-bold text-coffee-900 flex items-center gap-1.5">
+                <RefreshCw className="w-3.5 h-3.5 text-emerald-600 animate-spin" />
+                Đang chờ xác nhận thanh toán tự động từ Ngân hàng
               </span>
-              <p className="text-[11px] text-coffee-500">
-                Bấm nút để mô phỏng Webhook ngân hàng bắn về Server đối soát tức thì.
+              <p className="text-[11px] text-coffee-600 leading-relaxed">
+                Sau khi bạn chuyển khoản đúng nội dung <strong className="font-mono text-caramel">{order.orderCode}</strong>, hệ thống sẽ tự động đối soát trong 2–15 giây hoặc Thu ngân Cà Xòi sẽ xác nhận trực tiếp trên quầy.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleSimulateWebhook}
-              disabled={isSimulatingPayment}
-              className="text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl shadow-sm transition-all whitespace-nowrap active:scale-95 disabled:opacity-50"
+            <a
+              href={getTelHref(settings?.hotline || "0905 249 733")}
+              className="text-xs font-bold bg-coffee-800 hover:bg-coffee-900 text-white px-3.5 py-2 rounded-xl shadow-sm transition-all whitespace-nowrap shrink-0"
             >
-              {isSimulatingPayment ? "Đang đối soát..." : "Mô phỏng Chuyển khoản thành công"}
-            </button>
+              📞 Gọi quầy: {settings?.hotline || "0905 249 733"}
+            </a>
           </div>
-          {simMessage && (
-            <p className="text-xs text-emerald-700 font-bold bg-emerald-50 p-2 rounded-lg text-center">
-              {simMessage}
-            </p>
-          )}
 
           {/* Customer Cancel Option directly on payment card */}
           {canCancel && (
@@ -514,6 +511,11 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
                     Ly của: {item.recipientLabel}
                   </span>
                 )}
+                {item.itemNotes && (
+                  <div className="text-[11px] text-amber-700 italic mt-0.5">
+                    Ghi chú pha chế: {item.itemNotes}
+                  </div>
+                )}
               </div>
 
               <div className="font-bold text-sm text-coffee-900 whitespace-nowrap">
@@ -535,10 +537,18 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
               <span className="font-bold">-{formatVND(order.discountAmount)}</span>
             </div>
           )}
-          {order.orderType === "OFFICE_DELIVERY" && order.deliveryFee > 0 && (
-            <div className="flex justify-between">
+          {order.orderType === "OFFICE_DELIVERY" && (
+            <div className="flex justify-between items-center">
               <span>Phí giao hàng:</span>
-              <span>{formatVND(order.deliveryFee)}</span>
+              {order.deliveryFee > 0 ? (
+                <span className="font-semibold text-coffee-800">{formatVND(order.deliveryFee)}</span>
+              ) : settings?.shippingFeeMode === "MANUAL_ZERO" ? (
+                <span className="font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                  0đ (Quán sẽ báo phí ship sau)
+                </span>
+              ) : (
+                <span className="font-bold text-emerald-700">Miễn phí (0đ)</span>
+              )}
             </div>
           )}
           <div className="flex justify-between text-base font-extrabold text-coffee-900 pt-2 border-t border-coffee-200">
@@ -558,6 +568,16 @@ export default function OrderTrackingPage({ params }: { params: { id: string } }
               <Building className="w-3.5 h-3.5 text-coffee-400" />
               <span>
                 {order.buildingName} - {order.floorRoom} {order.companyName && `(${order.companyName})`}
+              </span>
+            </div>
+          )}
+          {order.shipperName && (
+            <div className="flex items-center gap-2 text-emerald-800 bg-emerald-50 p-2 rounded-xl border border-emerald-200">
+              <Truck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>
+                Tài xế giao: <strong>{order.shipperName}</strong>
+                {order.shipperPhone && ` • ${order.shipperPhone}`}
+                {order.estimatedDeliveryTime && ` (Dự kiến: ${order.estimatedDeliveryTime})`}
               </span>
             </div>
           )}

@@ -179,31 +179,56 @@ export interface DistanceCalculationResult {
   durationMinutes: number;
   deliveryFee: number;
   isFreeDelivery: boolean;
+  shippingFeeMode: "AUTO" | "MANUAL_ZERO";
   provider: "GOOGLE_MAPS_API" | "SMART_LOCAL_ROUTING";
   googleMapsDirectionsUrl: string;
   destinationTitle: string;
 }
 
+export interface ShippingFeeConfig {
+  baseDeliveryFee?: number;
+  freeDeliveryMinCups?: number;
+  shippingFeeMode?: "AUTO" | "MANUAL_ZERO";
+}
+
 /**
- * Tính toán phí giao hàng dựa theo khoảng cách km và số lượng ly
+ * Tính toán phí giao hàng dựa theo khoảng cách km, số lượng ly và cấu hình quán từ SQLite
  */
 export function computeDeliveryFee(
   distanceKm: number,
   totalCups: number = 1,
-  isTakeaway: boolean = false
-): { deliveryFee: number; isFreeDelivery: boolean } {
-  if (isTakeaway || totalCups >= CAXOI_STORE.freeDeliveryMinCups) {
-    return { deliveryFee: 0, isFreeDelivery: true };
+  isTakeaway: boolean = false,
+  config?: ShippingFeeConfig
+): { deliveryFee: number; isFreeDelivery: boolean; shippingFeeMode: "AUTO" | "MANUAL_ZERO" } {
+  const mode: "AUTO" | "MANUAL_ZERO" = config?.shippingFeeMode === "MANUAL_ZERO" ? "MANUAL_ZERO" : "AUTO";
+  const freeMinCups =
+    config?.freeDeliveryMinCups !== undefined && config.freeDeliveryMinCups >= 0
+      ? config.freeDeliveryMinCups
+      : CAXOI_STORE.freeDeliveryMinCups;
+  const baseFee =
+    config?.baseDeliveryFee !== undefined && config.baseDeliveryFee >= 0
+      ? config.baseDeliveryFee
+      : CAXOI_STORE.baseFee;
+
+  if (isTakeaway) {
+    return { deliveryFee: 0, isFreeDelivery: true, shippingFeeMode: mode };
   }
 
-  const baseFee = CAXOI_STORE.baseFee;
+  if (mode === "MANUAL_ZERO") {
+    return { deliveryFee: 0, isFreeDelivery: false, shippingFeeMode: mode };
+  }
+
+  if (freeMinCups > 0 && totalCups >= freeMinCups) {
+    return { deliveryFee: 0, isFreeDelivery: true, shippingFeeMode: mode };
+  }
+
   if (distanceKm <= CAXOI_STORE.baseDistanceKm) {
-    return { deliveryFee: baseFee, isFreeDelivery: false };
+    return { deliveryFee: baseFee, isFreeDelivery: false, shippingFeeMode: mode };
   }
 
   const extraKm = distanceKm - CAXOI_STORE.baseDistanceKm;
-  const extraFee = Math.ceil(extraKm * CAXOI_STORE.feePerExtraKm / 1000) * 1000;
-  return { deliveryFee: baseFee + extraFee, isFreeDelivery: false };
+  const extraFee = Math.ceil((extraKm * CAXOI_STORE.feePerExtraKm) / 1000) * 1000;
+  return { deliveryFee: baseFee + extraFee, isFreeDelivery: false, shippingFeeMode: mode };
 }
 
 /**
@@ -221,19 +246,20 @@ export function buildGoogleMapsDirectionsUrl(destinationAddress: string): string
 export async function calculateShippingDistance(
   destination: string,
   totalCups: number = 1,
-  isTakeaway: boolean = false
+  isTakeaway: boolean = false,
+  config?: ShippingFeeConfig
 ): Promise<DistanceCalculationResult> {
-  const cleanDest = destination.trim();
+  const cleanDest = destination.trim().slice(0, 200);
   const lowerDest = cleanDest.toLowerCase();
   const mapsUrl = buildGoogleMapsDirectionsUrl(cleanDest);
 
-  // 1. Thử gọi Google Maps Distance Matrix API nếu có API key
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  // 1. Chỉ sử dụng GOOGLE_MAPS_API_KEY phía server (không dùng biến NEXT_PUBLIC_ lộ ra trình duyệt)
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
   if (apiKey) {
     try {
       const originParam = encodeURIComponent(CAXOI_STORE.address);
       const destParam = encodeURIComponent(cleanDest + ", Đà Nẵng, Việt Nam");
-      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originParam}&destinations=${destParam}&mode=bicycling&language=vi&key=${apiKey}`;
+      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originParam}&destinations=${destParam}&mode=driving&language=vi&key=${apiKey}`;
 
       const res = await fetch(url, { next: { revalidate: 3600 } });
       const data = await res.json();
@@ -247,13 +273,14 @@ export async function calculateShippingDistance(
         const seconds = element.duration.value;
         const distanceKm = Math.round((meters / 1000) * 10) / 10;
         const durationMinutes = Math.max(3, Math.round(seconds / 60));
-        const feeInfo = computeDeliveryFee(distanceKm, totalCups, isTakeaway);
+        const feeInfo = computeDeliveryFee(distanceKm, totalCups, isTakeaway, config);
 
         return {
           distanceKm,
           durationMinutes,
           deliveryFee: feeInfo.deliveryFee,
           isFreeDelivery: feeInfo.isFreeDelivery,
+          shippingFeeMode: feeInfo.shippingFeeMode,
           provider: "GOOGLE_MAPS_API",
           googleMapsDirectionsUrl: mapsUrl,
           destinationTitle: cleanDest,
@@ -267,6 +294,7 @@ export async function calculateShippingDistance(
   // 2. Fallback: Định vị chuẩn xác theo địa chỉ / tòa nhà văn phòng Đà Nẵng
   let distanceKm = 2.0; // Mặc định quận trung tâm Hải Châu
   let matchedTitle = cleanDest;
+  let matchedKnownLocation = false;
 
   for (const [key, loc] of Object.entries(DANANG_LOCATIONS)) {
     if (lowerDest.includes(key)) {
@@ -278,12 +306,13 @@ export async function calculateShippingDistance(
         distanceKm = Math.round(crowKm * 1.25 * 10) / 10;
       }
       matchedTitle = loc.name;
+      matchedKnownLocation = true;
       break;
     }
   }
 
-  // Nếu nhập địa chỉ đường phố cụ thể nhưng không khớp tòa nhà
-  if (distanceKm === 2.0) {
+  // Nếu nhập địa chỉ đường phố cụ thể nhưng không khớp tòa nhà đã biết
+  if (!matchedKnownLocation) {
     if (lowerDest.includes("hải châu") || lowerDest.includes("hai chau") || lowerDest.includes("bạch đằng") || lowerDest.includes("quang trung") || lowerDest.includes("trần phú") || lowerDest.includes("lê duẩn")) {
       distanceKm = 1.5;
     } else if (lowerDest.includes("thanh khê") || lowerDest.includes("thanh khe") || lowerDest.includes("nguyễn văn linh") || lowerDest.includes("điện biên phủ")) {
@@ -301,13 +330,14 @@ export async function calculateShippingDistance(
 
   // Tốc độ xe máy giao hàng trung bình nội thành ~25km/h (tính cả lấy xe và gửi bảo vệ)
   const durationMinutes = Math.max(5, Math.round(distanceKm * 2.5 + 4));
-  const feeInfo = computeDeliveryFee(distanceKm, totalCups, isTakeaway);
+  const feeInfo = computeDeliveryFee(distanceKm, totalCups, isTakeaway, config);
 
   return {
     distanceKm,
     durationMinutes,
     deliveryFee: feeInfo.deliveryFee,
     isFreeDelivery: feeInfo.isFreeDelivery,
+    shippingFeeMode: feeInfo.shippingFeeMode,
     provider: "SMART_LOCAL_ROUTING",
     googleMapsDirectionsUrl: mapsUrl,
     destinationTitle: matchedTitle,

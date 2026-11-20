@@ -6,7 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Coffee, ShoppingBag, Users, Sparkles, Phone, Truck } from "lucide-react";
 import { useCart } from "@/context/CartContext";
-import { formatVND, XANH_SM_ONELINK, getTelHref } from "@/lib/utils";
+import { formatVND, XANH_SM_ONELINK, getTelHref, sanitizeExternalUrl } from "@/lib/utils";
 import { useBusinessSettings } from "@/lib/useBusinessSettings";
 import CustomerOrderLookupModal from "@/components/CustomerOrderLookupModal";
 
@@ -86,7 +86,7 @@ export default function Header() {
 
             {/* Xanh SM Ngon Direct Link */}
             <a
-              href={settings.xanhSmUrl || XANH_SM_ONELINK}
+              href={sanitizeExternalUrl(settings.xanhSmUrl, XANH_SM_ONELINK)}
               target="_blank"
               rel="noopener noreferrer"
               className="hidden sm:inline-flex items-center gap-1.5 text-xs font-bold bg-[#008F5D] hover:bg-[#00764D] text-white px-3 py-1.5 rounded-xl border border-emerald-400/50 shadow-sm transition-all hover:scale-105 active:scale-95"

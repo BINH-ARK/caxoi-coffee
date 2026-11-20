@@ -425,6 +425,10 @@ export default function PromotionManager({
                             <Percent className="w-3 h-3 text-amber-600" />
                             Giảm {p.discountValue}%
                           </span>
+                        ) : p.discountType === "FREESHIP" ? (
+                          <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-800 border border-sky-200 px-2.5 py-1 rounded-xl font-bold">
+                            🚚 Freeship tối đa {formatVND(p.discountValue)}
+                          </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-1 rounded-xl font-bold">
                             <DollarSign className="w-3 h-3 text-emerald-600" />
@@ -568,12 +572,14 @@ export default function PromotionManager({
                   >
                     <option value="PERCENTAGE">Theo Phần Trăm (%)</option>
                     <option value="FIXED">Số Tiền Cố Định (VNĐ)</option>
+                    <option value="FREESHIP">Miễn Phí Giao Hàng (VNĐ tối đa)</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-coffee-800 mb-1">
-                    Mức Giảm <span className="text-rose-500">*</span>
+                    {formData.discountType === "FREESHIP" ? "Hỗ Trợ Ship Tối Đa" : "Mức Giảm"}{" "}
+                    <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -587,7 +593,11 @@ export default function PromotionManager({
                     className="w-full text-xs px-3 py-2.5 rounded-xl border border-coffee-200 focus:outline-none focus:ring-2 focus:ring-caramel/40 font-bold"
                   />
                   <p className="text-[10px] text-stone-400 mt-1">
-                    {formData.discountType === "PERCENTAGE" ? "Nhập từ 1 đến 100" : "Nhập số tiền VNĐ"}
+                    {formData.discountType === "PERCENTAGE"
+                      ? "Nhập từ 1 đến 100"
+                      : formData.discountType === "FREESHIP"
+                      ? "Chỉ trừ vào phí giao hàng (VNĐ)"
+                      : "Nhập số tiền VNĐ"}
                   </p>
                 </div>
               </div>

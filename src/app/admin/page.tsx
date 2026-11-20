@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -164,6 +164,7 @@ export default function AdminPage() {
 
   const [smtpUserConfig, setSmtpUserConfig] = useState("");
   const [smtpPassConfig, setSmtpPassConfig] = useState("");
+  const [hasSmtpPassword, setHasSmtpPassword] = useState(false);
   const [smtpFromConfig, setSmtpFromConfig] = useState("Cà Xòi Coffee & Tea ☕");
   const [showSmtpPass, setShowSmtpPass] = useState(false);
   const [isSavingEmailConfig, setIsSavingEmailConfig] = useState(false);
@@ -214,7 +215,8 @@ export default function AdminPage() {
       }
       if (emailConfigData.success && emailConfigData.data) {
         setSmtpUserConfig(emailConfigData.data.smtpUser || "");
-        setSmtpPassConfig(emailConfigData.data.smtpPass || "");
+        setSmtpPassConfig("");
+        setHasSmtpPassword(Boolean(emailConfigData.data.hasPassword));
         setSmtpFromConfig(emailConfigData.data.smtpFrom || "Cà Xòi Coffee & Tea ☕");
         setIsEmailConfigured(emailConfigData.data.isConfigured || false);
         if (emailConfigData.data.smtpUser) {
@@ -379,16 +381,26 @@ export default function AdminPage() {
     setEditingProductId(product.id);
     setIsCreateProductMode(false);
 
-    // Đảm bảo luôn có kích cỡ chuẩn "Ly" và các size chai phụ thu
-    let currentVariants = product.variants ? [...product.variants] : [];
-    if (!currentVariants.some((v) => v.sizeName.trim().toLowerCase() === "ly")) {
-      currentVariants.unshift({
-        id: 1,
-        productId: product.id,
-        sizeName: "Ly",
-        extraPrice: 0,
-        isDefault: true,
-      });
+    // Giữ nguyên danh sách kích cỡ hiện có của sản phẩm; chỉ tạo mặc định nếu sản phẩm chưa có size nào
+    const currentVariants =
+      product.variants && product.variants.length > 0
+        ? product.variants.map((v, i) => ({
+            id: v.id || i + 1,
+            sizeName: v.sizeName,
+            extraPrice: v.extraPrice,
+            isDefault: v.isDefault,
+          }))
+        : [
+            {
+              id: 1,
+              sizeName: "Ly",
+              extraPrice: 0,
+              isDefault: true,
+            },
+          ];
+
+    if (!currentVariants.some((v) => v.isDefault) && currentVariants.length > 0) {
+      currentVariants[0] = { ...currentVariants[0], isDefault: true };
     }
 
     setProductForm({
@@ -402,12 +414,7 @@ export default function AdminPage() {
       isFeatured: product.isFeatured || false,
       prepTimeMinutes: product.prepTimeMinutes || 5,
       tags: [...product.tags],
-      variants: currentVariants.map((v, i) => ({
-        id: v.id || i + 1,
-        sizeName: v.sizeName,
-        extraPrice: v.extraPrice,
-        isDefault: v.isDefault,
-      })),
+      variants: currentVariants,
     });
     setIsEditProductOpen(true);
   };
@@ -436,9 +443,13 @@ export default function AdminPage() {
     setIsEditProductOpen(true);
   };
 
-  // Reset menu back to standard Cà Xòi 5-item menu
+  // Reset menu back to standard Cà Xòi 5-item menu (safe: preserves orders, staff, settings)
   const handleResetMenu = async () => {
-    if (!confirm("Khôi phục toàn bộ Thực đơn 5 món & 3 quy cách chuẩn Quán Cà Xòi (Ly, 100ml, 250ml)?")) {
+    if (
+      !confirm(
+        "Khôi phục Thực đơn 5 món & 3 quy cách chuẩn Quán Cà Xòi (Ly, 100ml, 250ml)?\n(Lưu ý: Đơn hàng, tài khoản nhân viên, voucher và cài đặt quán vẫn được giữ nguyên an toàn.)"
+      )
+    ) {
       return;
     }
     try {
@@ -453,6 +464,8 @@ export default function AdminPage() {
         notifyMenuUpdated();
         fetchData();
         setTimeout(() => setActionMsg(""), 3500);
+      } else {
+        alert(data.message || "Không thể khôi phục thực đơn gốc.");
       }
     } catch (e) {
       console.error(e);
@@ -460,29 +473,26 @@ export default function AdminPage() {
     }
   };
 
-  // Variant management in Modal
+  // Variant management in Modal (immutable updates)
   const handleAddVariant = () => {
-    const nextId = productForm.variants.length + 1;
-    setProductForm((prev) => ({
-      ...prev,
-      variants: [
-        ...prev.variants,
-        { id: nextId, sizeName: `Size mới (${nextId})`, extraPrice: 5000, isDefault: false },
-      ],
-    }));
+    setProductForm((prev) => {
+      const nextId = Math.max(0, ...prev.variants.map((v) => v.id)) + 1;
+      return {
+        ...prev,
+        variants: [
+          ...prev.variants,
+          { id: nextId, sizeName: `Size mới (${nextId})`, extraPrice: 5000, isDefault: false },
+        ],
+      };
+    });
   };
 
   const handleUpdateVariant = (index: number, field: string, value: any) => {
     setProductForm((prev) => {
-      const updated = [...prev.variants];
-      if (field === "isDefault" && value === true) {
-        // Set all others to false
-        updated.forEach((v, i) => {
-          v.isDefault = i === index;
-        });
-      } else {
-        updated[index] = { ...updated[index], [field]: value };
-      }
+      const updated =
+        field === "isDefault" && value === true
+          ? prev.variants.map((v, i) => ({ ...v, isDefault: i === index }))
+          : prev.variants.map((v, i) => (i === index ? { ...v, [field]: value } : v));
       return { ...prev, variants: updated };
     });
   };
@@ -492,10 +502,16 @@ export default function AdminPage() {
       alert("Món phải có ít nhất 1 kích cỡ.");
       return;
     }
-    setProductForm((prev) => ({
-      ...prev,
-      variants: prev.variants.filter((_, i) => i !== index),
-    }));
+    setProductForm((prev) => {
+      const remaining = prev.variants.filter((_, i) => i !== index);
+      if (remaining.length > 0 && !remaining.some((v) => v.isDefault)) {
+        remaining[0] = { ...remaining[0], isDefault: true };
+      }
+      return {
+        ...prev,
+        variants: remaining,
+      };
+    });
   };
 
   // Save product updates (name, price, sizes, status)
@@ -803,9 +819,12 @@ export default function AdminPage() {
         notifyMenuUpdated();
         fetchData();
         setTimeout(() => setActionMsg(""), 3500);
+      } else {
+        alert(data.message || "Không thể cập nhật thông tin nhân viên.");
       }
     } catch (e) {
       console.error(e);
+      alert("Lỗi kết nối khi cập nhật nhân viên.");
     }
   };
 
@@ -816,7 +835,7 @@ export default function AdminPage() {
     setEditStaffRole(staff.role);
     setEditStaffPhone(staff.phone || "");
     setEditStaffEmail(staff.email || "");
-    setEditStaffPin(staff.pin || "");
+    setEditStaffPin("");
     setEditStaffPassword("");
   };
 
@@ -824,20 +843,24 @@ export default function AdminPage() {
   const handleSaveEditStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingStaff) return;
+    const isPinRole = editStaffRole === "BARISTA" || editStaffRole === "CASHIER";
     try {
+      const payload: Record<string, any> = {
+        action: "UPDATE_STAFF",
+        staffId: editingStaff.id,
+        fullName: editStaffFullName,
+        role: editStaffRole,
+        phone: editStaffPhone,
+        email: editStaffEmail.trim() || undefined,
+        password: editStaffPassword || undefined,
+      };
+      if (isPinRole && editStaffPin.trim() !== "") {
+        payload.pin = editStaffPin.trim();
+      }
       const res = await fetch("/api/admin/roles", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "UPDATE_STAFF",
-          staffId: editingStaff.id,
-          fullName: editStaffFullName,
-          role: editStaffRole,
-          phone: editStaffPhone,
-          email: editStaffEmail.trim() || undefined,
-          pin: editStaffPin,
-          password: editStaffPassword || undefined,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.success) {
@@ -889,6 +912,7 @@ export default function AdminPage() {
   // Create new staff
   const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isPinRole = newStaffRole === "BARISTA" || newStaffRole === "CASHIER";
     try {
       const res = await fetch("/api/admin/roles", {
         method: "PATCH",
@@ -900,7 +924,7 @@ export default function AdminPage() {
           role: newStaffRole,
           phone: newStaffPhone,
           email: newStaffEmail.trim() || undefined,
-          pin: newStaffPin,
+          pin: isPinRole ? newStaffPin.trim() || undefined : undefined,
           password: newStaffPassword,
         }),
       });
@@ -921,6 +945,7 @@ export default function AdminPage() {
       }
     } catch (e) {
       console.error(e);
+      alert("Lỗi kết nối khi tạo nhân viên.");
     }
   };
 
@@ -947,6 +972,13 @@ export default function AdminPage() {
   // Save SMTP credentials directly to .env
   const handleSaveEmailConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasSmtpPassword && !smtpPassConfig.trim()) {
+      setEmailConfigMsg({
+        success: false,
+        message: "Vui lòng nhập Mật khẩu ứng dụng Google (16 ký tự).",
+      });
+      return;
+    }
     setIsSavingEmailConfig(true);
     setEmailConfigMsg(null);
     try {
@@ -963,6 +995,8 @@ export default function AdminPage() {
       if (data.success) {
         setEmailConfigMsg({ success: true, message: data.message });
         setIsEmailConfigured(true);
+        setHasSmtpPassword(true);
+        setSmtpPassConfig("");
         if (!testEmailTarget) {
           setTestEmailTarget(smtpUserConfig.trim());
         }
@@ -1682,9 +1716,9 @@ export default function AdminPage() {
                 </thead>
                 <tbody className="divide-y divide-coffee-100">
                   {Object.entries(categoriesMap).map(([catKey, cat]) => (
-                    <>
+                    <Fragment key={catKey}>
                       {/* Category Header Row */}
-                      <tr key={catKey} className="bg-amber-50/50">
+                      <tr className="bg-amber-50/50">
                         <td colSpan={5} className="py-2 px-3 font-bold text-coffee-800 text-xs">
                           {cat.label}
                         </td>
@@ -1700,21 +1734,22 @@ export default function AdminPage() {
                             </span>
                           </td>
 
-                          {/* Columns for each role */}
-                          {roleConfigs.map((role) => {
-                            const isGranted = role.permissions.includes(perm.code);
-                            const isSuperAdmin = role.roleId === "SUPER_ADMIN";
+                          {/* Columns aligned explicitly to table header order */}
+                          {(["SUPER_ADMIN", "STORE_MANAGER", "CASHIER", "BARISTA"] as const).map((roleId) => {
+                            const role = roleConfigs.find((r) => r.roleId === roleId);
+                            const isGranted = role ? role.permissions.includes(perm.code) : false;
+                            const isSuperAdmin = roleId === "SUPER_ADMIN";
 
                             return (
-                              <td key={role.roleId} className="py-2.5 px-3 text-center">
+                              <td key={roleId} className="py-2.5 px-3 text-center">
                                 <label className="inline-flex items-center justify-center cursor-pointer">
                                   <input
                                     type="checkbox"
                                     checked={isGranted}
-                                    disabled={isSuperAdmin}
-                                    onChange={() => handleTogglePermission(role.roleId, perm.code)}
+                                    disabled={isSuperAdmin || !role}
+                                    onChange={() => handleTogglePermission(roleId, perm.code)}
                                     className={`w-4 h-4 rounded text-caramel focus:ring-caramel/40 cursor-pointer ${
-                                      isSuperAdmin ? "opacity-70 cursor-not-allowed" : ""
+                                      isSuperAdmin || !role ? "opacity-70 cursor-not-allowed" : ""
                                     }`}
                                   />
                                 </label>
@@ -1723,7 +1758,7 @@ export default function AdminPage() {
                           })}
                         </tr>
                       ))}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -1805,9 +1840,9 @@ export default function AdminPage() {
                                   <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-md">
                                     {m.role}
                                   </span>
-                                  {m.pin && (
+                                  {m.hasPin && (m.role === "BARISTA" || m.role === "CASHIER") && (
                                     <span className="text-[10px] font-mono bg-white text-amber-900 font-bold px-1.5 py-0.5 rounded border border-amber-200">
-                                      PIN: {m.pin}
+                                      PIN KDS: Đã cấp
                                     </span>
                                   )}
                                 </div>
@@ -1966,12 +2001,18 @@ export default function AdminPage() {
                         {staff.role === "BARISTA" || staff.role === "CASHIER" ? (
                           <div className="flex items-center gap-1.5">
                             <Key className="w-3.5 h-3.5 text-caramel" />
-                            <span className="font-mono font-bold text-sm bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                              {staff.pin || "Chưa cấp"}
+                            <span
+                              className={`font-mono font-bold text-xs px-2 py-0.5 rounded border ${
+                                staff.hasPin
+                                  ? "bg-amber-50 text-amber-900 border-amber-200"
+                                  : "bg-stone-50 text-stone-400 border-stone-200"
+                              }`}
+                            >
+                              {staff.hasPin ? "•••• (Đã cấp)" : "Chưa cấp"}
                             </span>
                           </div>
                         ) : (
-                          <span className="text-coffee-400">Dùng Mật khẩu</span>
+                          <span className="text-coffee-400">Chỉ dùng Mật khẩu</span>
                         )}
                       </td>
 
@@ -2103,14 +2144,25 @@ export default function AdminPage() {
                 {/* SMTP_PASS */}
                 <div>
                   <label className="block font-bold text-coffee-700 mb-1">
-                    Mật khẩu ứng dụng 16 ký tự (SMTP_PASS) <span className="text-red-500">*</span>
+                    Mật khẩu ứng dụng 16 ký tự (SMTP_PASS){" "}
+                    {!hasSmtpPassword ? (
+                      <span className="text-red-500">*</span>
+                    ) : (
+                      <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 ml-1">
+                        Đã lưu trong .env
+                      </span>
+                    )}
                   </label>
                   <div className="relative">
                     <Lock className="w-4 h-4 text-coffee-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type={showSmtpPass ? "text" : "password"}
-                      required
-                      placeholder="VD: xxxx xxxx xxxx xxxx"
+                      required={!hasSmtpPassword}
+                      placeholder={
+                        hasSmtpPassword
+                          ? "•••••••••••• (Để trống nếu giữ nguyên mật khẩu đã lưu)"
+                          : "VD: xxxx xxxx xxxx xxxx"
+                      }
                       value={smtpPassConfig}
                       onChange={(e) => setSmtpPassConfig(e.target.value)}
                       className="w-full text-xs pl-9 pr-9 py-2.5 rounded-xl border border-coffee-200 focus:outline-none focus:ring-2 focus:ring-caramel/40 bg-coffee-50/30 font-mono"
@@ -2124,7 +2176,7 @@ export default function AdminPage() {
                     </button>
                   </div>
                   <p className="text-[10px] text-coffee-500 mt-1">
-                    Tạo tại Google Account &gt; Bảo mật &gt; Xác minh 2 bước &gt; Mật khẩu ứng dụng.
+                    Tạo tại Google Account &gt; Bảo mật &gt; Xác minh 2 bước &gt; Mật khẩu ứng dụng. Hệ thống không bao giờ trả ngược mật khẩu cũ ra trình duyệt.
                   </p>
                 </div>
 
@@ -2865,14 +2917,19 @@ export default function AdminPage() {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-coffee-700 mb-1">Mã PIN KDS (Pha chế/Thu ngân)</label>
+                  <label className="block font-bold text-coffee-700 mb-1">Mã PIN KDS (4 số — Pha chế/Thu ngân)</label>
                   <input
                     type="text"
                     maxLength={4}
-                    placeholder="VD: 5588"
-                    value={newStaffPin}
-                    onChange={(e) => setNewStaffPin(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-coffee-200 focus:outline-none focus:ring-2 focus:ring-caramel/40 font-mono"
+                    disabled={newStaffRole !== "BARISTA" && newStaffRole !== "CASHIER"}
+                    placeholder={
+                      newStaffRole === "BARISTA" || newStaffRole === "CASHIER"
+                        ? "VD: 5588"
+                        : "Chỉ dùng Mật khẩu"
+                    }
+                    value={newStaffRole === "BARISTA" || newStaffRole === "CASHIER" ? newStaffPin : ""}
+                    onChange={(e) => setNewStaffPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    className="w-full px-3 py-2 rounded-xl border border-coffee-200 focus:outline-none focus:ring-2 focus:ring-caramel/40 font-mono disabled:bg-stone-100 disabled:text-stone-400"
                   />
                 </div>
               </div>
@@ -2890,10 +2947,14 @@ export default function AdminPage() {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-coffee-700 mb-1">Mật khẩu đăng nhập</label>
+                  <label className="block font-bold text-coffee-700 mb-1">
+                    Mật khẩu đăng nhập <span className="text-red-500">*</span>
+                  </label>
                   <input
-                    type="text"
-                    placeholder="Mặc định: Caxoi@123"
+                    type="password"
+                    required
+                    minLength={8}
+                    placeholder="Tối thiểu 8 ký tự"
                     value={newStaffPassword}
                     onChange={(e) => setNewStaffPassword(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-coffee-200 focus:outline-none focus:ring-2 focus:ring-caramel/40"
@@ -2991,14 +3052,21 @@ export default function AdminPage() {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-coffee-700 mb-1">Mã PIN KDS (4 số)</label>
+                  <label className="block font-bold text-coffee-700 mb-1">Mã PIN KDS mới (4 số)</label>
                   <input
                     type="text"
                     maxLength={4}
-                    placeholder="VD: 8823"
-                    value={editStaffPin}
-                    onChange={(e) => setEditStaffPin(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-coffee-200 focus:outline-none focus:ring-2 focus:ring-caramel/40 font-mono"
+                    disabled={editStaffRole !== "BARISTA" && editStaffRole !== "CASHIER"}
+                    placeholder={
+                      editStaffRole !== "BARISTA" && editStaffRole !== "CASHIER"
+                        ? "Chỉ dùng Mật khẩu"
+                        : editingStaff.hasPin
+                        ? "Để trống = giữ PIN cũ"
+                        : "Nhập 4 số PIN"
+                    }
+                    value={editStaffRole === "BARISTA" || editStaffRole === "CASHIER" ? editStaffPin : ""}
+                    onChange={(e) => setEditStaffPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    className="w-full px-3 py-2 rounded-xl border border-coffee-200 focus:outline-none focus:ring-2 focus:ring-caramel/40 font-mono disabled:bg-stone-100 disabled:text-stone-400"
                   />
                 </div>
               </div>
@@ -3035,10 +3103,11 @@ export default function AdminPage() {
 
               <div>
                 <label className="block font-bold text-coffee-700 mb-1">
-                  Mật khẩu mới (Bỏ trống nếu không muốn đổi)
+                  Mật khẩu mới (Bỏ trống nếu không muốn đổi — tối thiểu 8 ký tự)
                 </label>
                 <input
-                  type="text"
+                  type="password"
+                  minLength={8}
                   placeholder="Nhập mật khẩu mới..."
                   value={editStaffPassword}
                   onChange={(e) => setEditStaffPassword(e.target.value)}

@@ -6,10 +6,17 @@ import {
   createStaffInSqlite,
   deleteStaffInSqlite,
 } from "@/lib/sqlite";
+import { requireStaffAuth } from "@/lib/serverAuth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const auth = await requireStaffAuth(request, {
+    roles: ["SUPER_ADMIN"],
+    permission: "system.manage_roles",
+  });
+  if (!auth.ok) return auth.response;
+
   const rbacData = getRolesAndPermissionsFromSqlite();
   return NextResponse.json({
     success: true,
@@ -18,6 +25,12 @@ export async function GET() {
 }
 
 export async function PATCH(request: Request) {
+  const auth = await requireStaffAuth(request, {
+    roles: ["SUPER_ADMIN"],
+    permission: "system.manage_roles",
+  });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json();
     const { action } = body;
@@ -47,12 +60,22 @@ export async function PATCH(request: Request) {
     // 2. Update staff user details (FullName, Role, PIN, Status, Phone, Email, Password) in SQLite
     if (action === "UPDATE_STAFF") {
       const { staffId, fullName, role, pin, isActive, phone, email, password } = body;
-
-      const success = updateStaffInSqlite(staffId, { fullName, role, pin, isActive, phone, email, password });
-      if (!success) {
+      if (!staffId || typeof staffId !== "string") {
         return NextResponse.json(
-          { success: false, message: "Lỗi cập nhật nhân viên trong SQLite" },
-          { status: 500 }
+          { success: false, message: "Thiếu mã tài khoản nhân viên." },
+          { status: 400 }
+        );
+      }
+
+      const result = updateStaffInSqlite(
+        staffId,
+        { fullName, role, pin, isActive, phone, email, password },
+        auth.staff.id
+      );
+      if (!result.success) {
+        return NextResponse.json(
+          { success: false, message: result.message || "Lỗi cập nhật nhân viên trong SQLite" },
+          { status: 400 }
         );
       }
 
@@ -61,7 +84,7 @@ export async function PATCH(request: Request) {
 
       return NextResponse.json({
         success: true,
-        message: `Đã cập nhật thông tin nhân viên thành công!`,
+        message: result.message || "Đã cập nhật thông tin nhân viên thành công!",
         data: updatedStaff,
       });
     }
@@ -69,11 +92,14 @@ export async function PATCH(request: Request) {
     // 3. Delete staff member from SQLite
     if (action === "DELETE_STAFF") {
       const { staffId } = body;
-      if (!staffId) {
-        return NextResponse.json({ success: false, message: "Thiếu mã tài khoản nhân viên." }, { status: 400 });
+      if (!staffId || typeof staffId !== "string") {
+        return NextResponse.json(
+          { success: false, message: "Thiếu mã tài khoản nhân viên." },
+          { status: 400 }
+        );
       }
 
-      const result = deleteStaffInSqlite(staffId);
+      const result = deleteStaffInSqlite(staffId, auth.staff.id);
       if (!result.success) {
         return NextResponse.json({ success: false, message: result.message }, { status: 400 });
       }
@@ -95,17 +121,28 @@ export async function PATCH(request: Request) {
         );
       }
 
+      const cleanUsername = String(username).trim();
+      if (!/^[a-zA-Z0-9._-]{3,32}$/.test(cleanUsername)) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Tên đăng nhập chỉ gồm chữ, số, dấu chấm/gạch (3–32 ký tự).",
+          },
+          { status: 400 }
+        );
+      }
+
       const rbacData = getRolesAndPermissionsFromSqlite();
-      if (rbacData.staff.some((s) => s.username.toLowerCase() === username.toLowerCase())) {
+      if (rbacData.staff.some((s) => s.username.toLowerCase() === cleanUsername.toLowerCase())) {
         return NextResponse.json(
           { success: false, message: "Tên đăng nhập này đã tồn tại trong CSDL SQLite." },
           { status: 400 }
         );
       }
 
-      const success = createStaffInSqlite({
-        username,
-        fullName,
+      const result = createStaffInSqlite({
+        username: cleanUsername,
+        fullName: String(fullName).trim(),
         role,
         phone,
         email,
@@ -113,19 +150,21 @@ export async function PATCH(request: Request) {
         password,
       });
 
-      if (!success) {
+      if (!result.success) {
         return NextResponse.json(
-          { success: false, message: "Lỗi tạo tài khoản nhân viên trong SQLite" },
-          { status: 500 }
+          { success: false, message: result.message || "Lỗi tạo tài khoản nhân viên trong SQLite" },
+          { status: 400 }
         );
       }
 
       const updatedRbac = getRolesAndPermissionsFromSqlite();
-      const newStaff = updatedRbac.staff.find((s) => s.username.toLowerCase() === username.toLowerCase());
+      const newStaff = updatedRbac.staff.find(
+        (s) => s.username.toLowerCase() === cleanUsername.toLowerCase()
+      );
 
       return NextResponse.json({
         success: true,
-        message: `Đã tạo tài khoản nhân viên "${fullName}" vào SQLite thành công!`,
+        message: result.message || `Đã tạo tài khoản nhân viên "${fullName}" vào SQLite thành công!`,
         data: newStaff,
       });
     }

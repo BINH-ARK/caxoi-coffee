@@ -16,7 +16,18 @@ interface ProductDetailModalProps {
   existingLyCount?: number;
 }
 
-export default function ProductDetailModal({
+export default function ProductDetailModal(props: ProductDetailModalProps) {
+  if (!props.product) return null;
+  return (
+    <ProductDetailModalInner
+      key={`${props.product.id}-${props.initialVariantName || ""}`}
+      {...props}
+      product={props.product}
+    />
+  );
+}
+
+function ProductDetailModalInner({
   product,
   options,
   onClose,
@@ -24,18 +35,27 @@ export default function ProductDetailModal({
   defaultRecipientLabel = "",
   initialVariantName,
   existingLyCount = 0,
-}: ProductDetailModalProps) {
-  if (!product) return null;
+}: Omit<ProductDetailModalProps, "product"> & { product: Product }) {
+  const fallbackVariant: ProductVariant = {
+    id: 0,
+    productId: product.id,
+    sizeName: "Chuẩn",
+    extraPrice: 0,
+    isDefault: true,
+  };
 
   // Selected Variant (Size)
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant>(() => {
-    if (initialVariantName) {
-      const found = product.variants.find(
-        (v) => v.sizeName.toLowerCase() === initialVariantName.toLowerCase()
-      );
-      if (found) return found;
+    if (product.variants && product.variants.length > 0) {
+      if (initialVariantName) {
+        const found = product.variants.find(
+          (v) => v.sizeName.toLowerCase() === initialVariantName.toLowerCase()
+        );
+        if (found) return found;
+      }
+      return product.variants.find((v) => v.isDefault) || product.variants[0];
     }
-    return product.variants.find((v) => v.isDefault) || product.variants[0];
+    return fallbackVariant;
   });
 
   // Selected Options
@@ -87,7 +107,7 @@ export default function ProductDetailModal({
   // Calculate Unit Price
   const { unitPrice, selectedOptionsList } = useMemo(() => {
     const base = product.salePrice ?? product.basePrice;
-    let extra = selectedVariant.extraPrice;
+    let extra = selectedVariant?.extraPrice ?? 0;
 
     const list: SelectedOptionItem[] = [];
 
@@ -130,7 +150,10 @@ export default function ProductDetailModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+      onClick={onClose}
+    >
       {/* Modal Container */}
       <div
         className="w-full max-w-lg bg-white rounded-t-3xl sm:rounded-3xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-coffee-100"
@@ -140,9 +163,10 @@ export default function ProductDetailModal({
         <div className="relative">
           <div className="relative w-full h-48 sm:h-56 bg-coffee-100">
             <Image
-              src={product.imageUrl}
+              src={product.imageUrl || "/images/ca-xoi-logo.jpg"}
               alt={product.name}
               fill
+              unoptimized
               className="object-cover"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/15" />

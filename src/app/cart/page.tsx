@@ -28,11 +28,14 @@ import {
   MIN_LY_ORDER,
   getMinLyValidationError,
   XANH_SM_ONELINK,
+  sanitizeExternalUrl,
 } from "@/lib/utils";
+import { useBusinessSettings } from "@/lib/useBusinessSettings";
 import { OrderType, PaymentMethod } from "@/types";
 
 export default function CartCheckoutPage() {
   const router = useRouter();
+  const settings = useBusinessSettings();
   const { items, updateQuantity, removeItem, clearCart, totalItems, lyCount, totalPrice } = useCart();
   const minLyError = getMinLyValidationError(items);
 
@@ -46,6 +49,7 @@ export default function CartCheckoutPage() {
   const [buildingName, setBuildingName] = useState("");
   const [floorRoom, setFloorRoom] = useState("");
   const [deliveryNotes, setDeliveryNotes] = useState("");
+  const [groupSessionCode, setGroupSessionCode] = useState<string | undefined>(undefined);
 
   // Scheduling
   const [scheduledType, setScheduledType] = useState<"ASAP" | "PREORDER">("ASAP");
@@ -74,7 +78,10 @@ export default function CartCheckoutPage() {
         if (data.hostName) setRecipientName(data.hostName);
         if (data.hostPhone) setRecipientPhone(data.hostPhone);
         if (data.buildingName) setBuildingName(data.buildingName);
-        if (data.sessionCode) setDeliveryNotes(`Đơn gom nhóm văn phòng mã #${data.sessionCode}`);
+        if (data.sessionCode) {
+          setGroupSessionCode(data.sessionCode);
+          setDeliveryNotes(`Đơn gom nhóm văn phòng mã #${data.sessionCode}`);
+        }
         setOrderType("OFFICE_DELIVERY");
         sessionStorage.removeItem("groupOrderData");
       }
@@ -83,32 +90,38 @@ export default function CartCheckoutPage() {
     }
   }, []);
 
+  const shippingFeeMode = settings.shippingFeeMode || "AUTO";
+  const freeDeliveryMinCups = settings.freeDeliveryMinCups || 3;
+
   // Google Maps Distance & Delivery Fee
   const [shippingInfo, setShippingInfo] = useState<{
     distanceKm: number;
     durationMinutes: number;
     deliveryFee: number;
     isFreeDelivery: boolean;
+    shippingFeeMode?: "AUTO" | "MANUAL_ZERO";
     provider: string;
     googleMapsDirectionsUrl: string;
     destinationTitle?: string;
   }>({
     distanceKm: 1.5,
     durationMinutes: 7,
-    deliveryFee: 15000,
-    isFreeDelivery: totalItems >= 3 || orderType === "TAKEAWAY",
+    deliveryFee: shippingFeeMode === "MANUAL_ZERO" ? 0 : settings.baseDeliveryFee || 15000,
+    isFreeDelivery: totalItems >= freeDeliveryMinCups || orderType === "TAKEAWAY" || shippingFeeMode === "MANUAL_ZERO",
+    shippingFeeMode,
     provider: "SMART_LOCAL_ROUTING",
     googleMapsDirectionsUrl: "https://www.google.com/maps/dir/?api=1&origin=02+Quang+Trung+Đà+Nẵng&destination=Software+Park+Đà+Nẵng",
   });
   const [isCalculatingShipping, setIsCalculatingShipping] = useState(false);
 
-  // Tính toán khoảng cách và phí ship theo Google Maps khi đổi tòa nhà hoặc số lượng món
+  // Tính toán khoảng cách và phí ship theo chế độ cài đặt từ Admin (AUTO / MANUAL_ZERO)
   useEffect(() => {
     if (orderType === "TAKEAWAY") {
       setShippingInfo((prev) => ({
         ...prev,
         deliveryFee: 0,
         isFreeDelivery: true,
+        shippingFeeMode,
       }));
       return;
     }
@@ -138,9 +151,14 @@ export default function CartCheckoutPage() {
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [buildingName, totalItems, orderType]);
+  }, [buildingName, totalItems, orderType, shippingFeeMode, settings.baseDeliveryFee, freeDeliveryMinCups]);
 
-  const deliveryFee = 0;
+  const deliveryFee =
+    orderType === "TAKEAWAY"
+      ? 0
+      : shippingFeeMode === "MANUAL_ZERO"
+      ? 0
+      : shippingInfo.deliveryFee;
 
   // Final Total
   const finalTotal = Math.max(0, totalPrice - voucherDiscount + deliveryFee);
@@ -205,7 +223,7 @@ export default function CartCheckoutPage() {
         })
         .catch(() => {});
     }
-  }, [totalPrice, deliveryFee]);
+  }, [totalPrice, deliveryFee, appliedVoucher]);
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -220,7 +238,8 @@ export default function CartCheckoutPage() {
       setFormError("Vui lòng nhập Họ và tên người nhận");
       return;
     }
-    if (!recipientPhone.trim() || !/^[0-9]{9,11}$/.test(recipientPhone.trim())) {
+    const cleanPhone = recipientPhone.trim().replace(/[\s.-]/g, "");
+    if (!cleanPhone || !/^[0-9]{9,11}$/.test(cleanPhone)) {
       setFormError("Vui lòng nhập Số điện thoại hợp lệ (9-11 chữ số)");
       return;
     }
@@ -242,7 +261,7 @@ export default function CartCheckoutPage() {
       const payload = {
         orderType,
         recipientName: recipientName.trim(),
-        recipientPhone: recipientPhone.trim(),
+        recipientPhone: cleanPhone,
         companyName: companyName.trim() || undefined,
         buildingName: orderType === "OFFICE_DELIVERY" ? buildingName.trim() : undefined,
         floorRoom: orderType === "OFFICE_DELIVERY" ? floorRoom.trim() : undefined,
@@ -251,8 +270,8 @@ export default function CartCheckoutPage() {
         scheduledTime: scheduledType === "PREORDER" ? scheduledTime : undefined,
         paymentMethod,
         items,
-        deliveryFee,
         promotionCode: appliedVoucher || undefined,
+        groupSessionCode,
       };
 
       const res = await fetch("/api/orders", {
@@ -266,6 +285,14 @@ export default function CartCheckoutPage() {
       if (!res.ok || !data.success) {
         throw new Error(data.message || "Lỗi tạo đơn hàng");
       }
+
+      // Lưu trackingToken & SĐT của chủ đơn để xem đầy đủ chi tiết & cho phép hủy khi chờ thanh toán
+      try {
+        localStorage.setItem("caxoi_customer_phone", cleanPhone);
+        if (data.data?.orderCode && data.data?.trackingToken) {
+          sessionStorage.setItem(`order_token_${data.data.orderCode}`, data.data.trackingToken);
+        }
+      } catch {}
 
       // Success: clear cart and redirect to Order Tracking page
       clearCart();
@@ -331,9 +358,10 @@ export default function CartCheckoutPage() {
                 <div key={item.cartItemId} className="pt-3 first:pt-0 flex gap-3">
                   <div className="relative w-16 h-16 rounded-xl overflow-hidden bg-coffee-50 shrink-0">
                     <Image
-                      src={item.product.imageUrl}
+                      src={item.product.imageUrl || "/images/ca-xoi-logo.jpg"}
                       alt={item.product.name}
                       fill
+                      unoptimized
                       className="object-cover"
                     />
                   </div>
@@ -463,7 +491,7 @@ export default function CartCheckoutPage() {
                 Thông tin đặt hàng
               </h2>
               <a
-                href={XANH_SM_ONELINK}
+                href={sanitizeExternalUrl(settings.xanhSmUrl, XANH_SM_ONELINK)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#008F5D] hover:text-[#00764D] bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 px-2.5 py-1 rounded-full transition-all"
@@ -710,11 +738,59 @@ export default function CartCheckoutPage() {
             </div>
 
             {/* Price breakdown summary */}
-            <div className="pt-3 border-t border-coffee-100 space-y-1.5 text-xs text-coffee-600">
+            <div className="pt-3 border-t border-coffee-100 space-y-2 text-xs text-coffee-600">
               <div className="flex justify-between">
                 <span>Tiền hàng ({totalItems} ly):</span>
                 <span className="font-semibold text-coffee-800">{formatVND(totalPrice)}</span>
               </div>
+
+              {/* Phí giao hàng theo chế độ Admin cài đặt (AUTO vs MANUAL_ZERO) */}
+              {orderType === "TAKEAWAY" ? (
+                <div className="flex justify-between items-center text-emerald-700">
+                  <span>Phí giao hàng (Đến quán lấy):</span>
+                  <span className="font-bold">0đ (Miễn phí)</span>
+                </div>
+              ) : shippingFeeMode === "MANUAL_ZERO" ? (
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <span>Phí giao hàng (Tạm tính):</span>
+                    <span className="font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg">
+                      0đ • Báo phí ship sau
+                    </span>
+                  </div>
+                  <div className="bg-amber-50/80 border border-amber-200/90 rounded-xl p-2.5 text-[11px] text-amber-900 leading-relaxed flex items-start gap-2">
+                    <Truck className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      Đơn hiện tạm tính <strong>0đ phí ship</strong>. Quán Cà Xòi sẽ liên hệ báo phí giao hàng thực tế trước khi gửi Shipper cho bạn.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="flex items-center gap-1">
+                      <MapPin className="w-3.5 h-3.5 text-caramel shrink-0" />
+                      <span>
+                        Phí giao hàng (~{shippingInfo.distanceKm} km):
+                      </span>
+                    </span>
+                    {isCalculatingShipping ? (
+                      <span className="text-[11px] text-coffee-400 italic">Đang tính...</span>
+                    ) : shippingInfo.isFreeDelivery || deliveryFee === 0 ? (
+                      <span className="font-bold text-emerald-700">
+                        Miễn phí (từ {freeDeliveryMinCups} ly)
+                      </span>
+                    ) : (
+                      <span className="font-bold text-coffee-800">{formatVND(deliveryFee)}</span>
+                    )}
+                  </div>
+                  {!shippingInfo.isFreeDelivery && deliveryFee > 0 && freeDeliveryMinCups > totalItems && (
+                    <p className="text-[10px] text-coffee-500">
+                      Mua thêm <strong>{freeDeliveryMinCups - totalItems} món</strong> nữa để được miễn phí giao hàng!
+                    </p>
+                  )}
+                </div>
+              )}
 
               {voucherDiscount > 0 && (
                 <div className="flex justify-between text-caramel">
@@ -724,7 +800,11 @@ export default function CartCheckoutPage() {
               )}
 
               <div className="flex justify-between text-base font-extrabold text-coffee-900 pt-2 border-t border-coffee-200">
-                <span>Tổng thanh toán:</span>
+                <span>
+                  {orderType === "OFFICE_DELIVERY" && shippingFeeMode === "MANUAL_ZERO"
+                    ? "Tạm tính thanh toán:"
+                    : "Tổng thanh toán:"}
+                </span>
                 <span className="text-caramel">{formatVND(finalTotal)}</span>
               </div>
             </div>
@@ -793,7 +873,7 @@ export default function CartCheckoutPage() {
                 </div>
 
                 <a
-                  href={XANH_SM_ONELINK}
+                  href={sanitizeExternalUrl(settings.xanhSmUrl, XANH_SM_ONELINK)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full inline-flex items-center justify-center gap-2 bg-[#008F5D] hover:bg-[#00764D] text-white font-black text-xs py-2.5 px-4 rounded-xl transition-all shadow-md hover:scale-[1.01] active:scale-95"

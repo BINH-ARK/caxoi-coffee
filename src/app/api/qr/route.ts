@@ -2,10 +2,16 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { FACEBOOK_FANPAGE_URL, XANH_SM_ONELINK } from "@/lib/utils";
+import { getBusinessSettingsFromSqlite } from "@/lib/sqlite";
 
 export const dynamic = "force-dynamic";
 
 const svgCache = new Map<string, string>();
+const SVG_SECURITY_HEADERS = {
+  "Content-Type": "image/svg+xml; charset=utf-8",
+  "X-Content-Type-Options": "nosniff",
+  "Content-Security-Policy": "default-src 'none'; sandbox",
+};
 
 function readLocalStaticQr(fileName: string): string | null {
   try {
@@ -21,7 +27,7 @@ function readLocalStaticQr(fileName: string): string | null {
 
 /**
  * GET /api/qr?url=...&color=140A06
- * Trả về mã QR SVG đồng bộ với liên kết Admin cấu hình, có fallback tệp tĩnh khi trùng URL mặc định.
+ * Trả về mã QR SVG đồng bộ với liên kết Admin cấu hình, chỉ cho phép URL thuộc cấu hình quán.
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -33,13 +39,31 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, message: "Thiếu tham số url" }, { status: 400 });
   }
 
+  // Chỉ cho phép tạo QR cho các liên kết đã được Admin cấu hình chính thức của quán
+  const settings = getBusinessSettingsFromSqlite();
+  const allowedUrls = new Set(
+    [
+      FACEBOOK_FANPAGE_URL,
+      XANH_SM_ONELINK,
+      settings.facebookUrl?.trim(),
+      settings.xanhSmUrl?.trim(),
+    ].filter((u): u is string => Boolean(u))
+  );
+
+  if (!allowedUrls.has(targetUrl)) {
+    return NextResponse.json(
+      { success: false, message: "Liên kết QR không nằm trong danh sách liên kết chính thức của quán." },
+      { status: 400 }
+    );
+  }
+
   if (targetUrl === FACEBOOK_FANPAGE_URL) {
     const staticSvg = readLocalStaticQr("qr-facebook.svg");
     if (staticSvg) {
       return new NextResponse(staticSvg, {
         status: 200,
         headers: {
-          "Content-Type": "image/svg+xml; charset=utf-8",
+          ...SVG_SECURITY_HEADERS,
           "Cache-Control": "public, max-age=3600",
         },
       });
@@ -52,7 +76,7 @@ export async function GET(request: Request) {
       return new NextResponse(staticSvg, {
         status: 200,
         headers: {
-          "Content-Type": "image/svg+xml; charset=utf-8",
+          ...SVG_SECURITY_HEADERS,
           "Cache-Control": "public, max-age=3600",
         },
       });
@@ -75,7 +99,7 @@ export async function GET(request: Request) {
     return new NextResponse(cached, {
       status: 200,
       headers: {
-        "Content-Type": "image/svg+xml; charset=utf-8",
+        ...SVG_SECURITY_HEADERS,
         "Cache-Control": "public, max-age=3600",
       },
     });
@@ -86,7 +110,7 @@ export async function GET(request: Request) {
     const res = await fetch(qrApiUrl, { signal: AbortSignal.timeout(6000) });
     if (res.ok) {
       const svgText = await res.text();
-      if (svgText.includes("<svg")) {
+      if (svgText.includes("<svg") && !/<script/i.test(svgText)) {
         if (svgCache.size > 100) {
           svgCache.clear();
         }
@@ -94,7 +118,7 @@ export async function GET(request: Request) {
         return new NextResponse(svgText, {
           status: 200,
           headers: {
-            "Content-Type": "image/svg+xml; charset=utf-8",
+            ...SVG_SECURITY_HEADERS,
             "Cache-Control": "public, max-age=3600",
           },
         });
@@ -110,7 +134,7 @@ export async function GET(request: Request) {
     return new NextResponse(fallbackSvg, {
       status: 200,
       headers: {
-        "Content-Type": "image/svg+xml; charset=utf-8",
+        ...SVG_SECURITY_HEADERS,
         "Cache-Control": "no-store",
       },
     });

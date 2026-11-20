@@ -5,12 +5,13 @@ import Image from "next/image";
 import { Product } from "@/types";
 import { ExternalLink } from "lucide-react";
 import WatermarkPattern from "@/components/WatermarkPattern";
-import { XANH_SM_ONELINK } from "@/lib/utils";
+import { XANH_SM_ONELINK, sanitizeExternalUrl } from "@/lib/utils";
 
 interface CaXoiMenuBoardProps {
   products: Product[];
   onSelectProductVariant?: (product: Product, variantName: string) => void;
   activeCategoryId?: number;
+  selectedTag?: string;
   searchQuery?: string;
   xanhSmUrl?: string;
 }
@@ -19,6 +20,7 @@ export default function CaXoiMenuBoard({
   products,
   onSelectProductVariant,
   activeCategoryId = 0,
+  selectedTag = "ALL",
   searchQuery = "",
   xanhSmUrl = XANH_SM_ONELINK,
 }: CaXoiMenuBoardProps) {
@@ -53,15 +55,18 @@ export default function CaXoiMenuBoard({
 
   const handlePillClick = (slug: string, variantName: string) => {
     const prod = products.find((p) => p.slug === slug || p.id === slug);
-    if (prod && onSelectProductVariant) {
+    if (prod && prod.isAvailable && onSelectProductVariant) {
       onSelectProductVariant(prod, variantName);
     }
   };
 
-  // Lọc sản phẩm theo danh mục và tìm kiếm nếu có
+  // Lọc sản phẩm theo danh mục, thẻ tag và tìm kiếm nếu có
   const filteredList = useMemo(() => {
     return products.filter((p) => {
       if (activeCategoryId !== 0 && p.categoryId !== activeCategoryId) {
+        return false;
+      }
+      if (selectedTag !== "ALL" && !p.tags.includes(selectedTag)) {
         return false;
       }
       if (searchQuery.trim()) {
@@ -70,7 +75,7 @@ export default function CaXoiMenuBoard({
       }
       return true;
     });
-  }, [products, activeCategoryId, searchQuery]);
+  }, [products, activeCategoryId, selectedTag, searchQuery]);
 
   // Xây dựng danh sách hiển thị tự động từ database
   const displayItems = useMemo(() => {
@@ -187,14 +192,18 @@ export default function CaXoiMenuBoard({
                     <div
                       key={item.slug}
                       className={`grid grid-cols-12 items-center py-3 sm:py-4 transition-all ${
-                        !isAvailable ? "opacity-40" : "hover:bg-pink-50/60 rounded-xl px-1 sm:px-2"
+                        !isAvailable ? "opacity-45" : "hover:bg-pink-50/60 rounded-xl px-1 sm:px-2"
                       }`}
                     >
                       {/* Cột Tên Món + Thumbnail Ảnh Tròn + Badge */}
                       <div
-                        onClick={() => prod && onSelectProductVariant && onSelectProductVariant(prod, "Ly")}
-                        className="col-span-6 flex items-center gap-2.5 sm:gap-4 text-left pl-0.5 cursor-pointer group"
-                        title={`Bấm để chọn ${displayName}`}
+                        onClick={() =>
+                          prod && isAvailable && onSelectProductVariant && onSelectProductVariant(prod, "Ly")
+                        }
+                        className={`col-span-6 flex items-center gap-2.5 sm:gap-4 text-left pl-0.5 group ${
+                          isAvailable ? "cursor-pointer" : "cursor-not-allowed"
+                        }`}
+                        title={isAvailable ? `Bấm để chọn ${displayName}` : `${displayName} hiện đang tạm hết`}
                       >
                         <div className="w-10 h-10 sm:w-12 sm:h-12 lg:w-14 lg:h-14 rounded-xl sm:rounded-2xl overflow-hidden bg-pink-100 shrink-0 shadow-sm relative group-hover:scale-105 transition-transform">
                           {prod?.imageUrl ? (
@@ -202,6 +211,7 @@ export default function CaXoiMenuBoard({
                               src={prod.imageUrl}
                               alt={displayName}
                               fill
+                              unoptimized
                               className="object-cover"
                               sizes="(max-width: 640px) 40px, 56px"
                             />
@@ -213,6 +223,11 @@ export default function CaXoiMenuBoard({
                         <div className="min-w-0 flex-1">
                           <div className="font-bold text-xs sm:text-base lg:text-lg text-[#2E180B] flex items-center gap-1.5 flex-wrap group-hover:text-rose-700 transition-colors leading-snug">
                             <span>{displayName}</span>
+                            {!isAvailable && (
+                              <span className="text-[10px] bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-full">
+                                Tạm hết
+                              </span>
+                            )}
                             {item.isBestSeller && (
                               <span className="text-xs sm:text-sm shrink-0" title="Món bán chạy nhất">🔥</span>
                             )}
@@ -232,7 +247,7 @@ export default function CaXoiMenuBoard({
                             type="button"
                             onClick={() => handlePillClick(item.slug, "Ly")}
                             disabled={!isAvailable}
-                            className="px-3 sm:px-5 lg:px-6 h-8 sm:h-10 lg:h-11 rounded-full bg-gradient-to-r from-[#EF4444] to-[#E11D48] hover:from-[#DC2626] hover:to-[#BE123C] active:scale-90 text-white font-black text-xs sm:text-sm lg:text-base flex items-center justify-center gap-0.5 shadow-md transition-all hover:ring-2 hover:ring-rose-300 cursor-pointer"
+                            className="px-3 sm:px-5 lg:px-6 h-8 sm:h-10 lg:h-11 rounded-full bg-gradient-to-r from-[#EF4444] to-[#E11D48] hover:from-[#DC2626] hover:to-[#BE123C] active:scale-90 text-white font-black text-xs sm:text-sm lg:text-base flex items-center justify-center gap-0.5 shadow-md transition-all hover:ring-2 hover:ring-rose-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                             title={`Bấm để chọn ${displayName} • Ly (${lyPrice}.000đ, đặt từ 5 ly)`}
                           >
                             <span>{lyPrice}</span>
@@ -250,7 +265,7 @@ export default function CaXoiMenuBoard({
                             type="button"
                             onClick={() => handlePillClick(item.slug, "100ml")}
                             disabled={!isAvailable}
-                            className="px-3 sm:px-5 lg:px-6 h-8 sm:h-10 lg:h-11 rounded-full bg-gradient-to-r from-[#EF4444] to-[#E11D48] hover:from-[#DC2626] hover:to-[#BE123C] active:scale-90 text-white font-black text-xs sm:text-sm lg:text-base flex items-center justify-center gap-0.5 shadow-md transition-all hover:ring-2 hover:ring-rose-300 cursor-pointer"
+                            className="px-3 sm:px-5 lg:px-6 h-8 sm:h-10 lg:h-11 rounded-full bg-gradient-to-r from-[#EF4444] to-[#E11D48] hover:from-[#DC2626] hover:to-[#BE123C] active:scale-90 text-white font-black text-xs sm:text-sm lg:text-base flex items-center justify-center gap-0.5 shadow-md transition-all hover:ring-2 hover:ring-rose-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                             title={`Bấm để chọn ${displayName} • Chai rót 100ml (${p100Price}.000đ)`}
                           >
                             <span>{p100Price}</span>
@@ -268,7 +283,7 @@ export default function CaXoiMenuBoard({
                             type="button"
                             onClick={() => handlePillClick(item.slug, "250ml")}
                             disabled={!isAvailable}
-                            className="px-3 sm:px-5 lg:px-6 h-8 sm:h-10 lg:h-11 rounded-full bg-gradient-to-r from-[#EF4444] to-[#E11D48] hover:from-[#DC2626] hover:to-[#BE123C] active:scale-90 text-white font-black text-xs sm:text-sm lg:text-base flex items-center justify-center gap-0.5 shadow-md transition-all hover:ring-2 hover:ring-rose-300 cursor-pointer"
+                            className="px-3 sm:px-5 lg:px-6 h-8 sm:h-10 lg:h-11 rounded-full bg-gradient-to-r from-[#EF4444] to-[#E11D48] hover:from-[#DC2626] hover:to-[#BE123C] active:scale-90 text-white font-black text-xs sm:text-sm lg:text-base flex items-center justify-center gap-0.5 shadow-md transition-all hover:ring-2 hover:ring-rose-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                             title={`Bấm để chọn ${displayName} • Chai rót 250ml (${p250Price}.000đ)`}
                           >
                             <span>{p250Price}</span>
@@ -336,7 +351,7 @@ export default function CaXoiMenuBoard({
             </div>
           </div>
           <a
-            href={xanhSmUrl || XANH_SM_ONELINK}
+            href={sanitizeExternalUrl(xanhSmUrl, XANH_SM_ONELINK)}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 bg-white text-emerald-900 hover:bg-emerald-50 font-black text-xs px-3.5 py-2 rounded-xl transition-all shadow-md hover:scale-105 active:scale-95 shrink-0"

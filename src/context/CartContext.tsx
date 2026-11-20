@@ -47,24 +47,39 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const addToCart = (newItem: CartItem) => {
     setItems((prev) => {
-      // Check if an item with identical product, variant, options and label exists
+      const normalizedNotes = (newItem.notes || "").trim();
+      const normalizedLabel = (newItem.recipientLabel || "").trim();
+      // Check if an item with identical product, variant, options, label and notes exists
       const existingIdx = prev.findIndex(
         (i) =>
           i.product.id === newItem.product.id &&
           i.variant.id === newItem.variant.id &&
-          i.recipientLabel === newItem.recipientLabel &&
+          (i.recipientLabel || "").trim() === normalizedLabel &&
+          (i.notes || "").trim() === normalizedNotes &&
           JSON.stringify(i.selectedOptions) === JSON.stringify(newItem.selectedOptions)
       );
 
       if (existingIdx > -1) {
-        const updated = [...prev];
-        const nextQty = Math.min(50, updated[existingIdx].quantity + newItem.quantity);
-        updated[existingIdx].quantity = nextQty;
-        updated[existingIdx].totalPrice = updated[existingIdx].unitPrice * nextQty;
-        return updated;
+        return prev.map((item, idx) => {
+          if (idx !== existingIdx) return item;
+          const nextQty = Math.min(50, item.quantity + newItem.quantity);
+          return {
+            ...item,
+            quantity: nextQty,
+            totalPrice: item.unitPrice * nextQty,
+          };
+        });
       }
 
-      return [...prev, { ...newItem, quantity: Math.min(50, newItem.quantity), totalPrice: newItem.unitPrice * Math.min(50, newItem.quantity) }];
+      const clampedQty = Math.max(1, Math.min(50, newItem.quantity));
+      return [
+        ...prev,
+        {
+          ...newItem,
+          quantity: clampedQty,
+          totalPrice: newItem.unitPrice * clampedQty,
+        },
+      ];
     });
   };
 

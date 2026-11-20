@@ -121,3 +121,64 @@ export function parseProductTags(raw: unknown): string[] {
   }
   return [];
 }
+
+/**
+ * Chỉ cho phép URL http:// hoặc https:// (chống Stored XSS qua javascript: / data:).
+ */
+export function sanitizeExternalUrl(raw: string | undefined | null, fallback: string): string {
+  const val = (raw || "").trim();
+  if (!val) return fallback;
+  try {
+    const parsed = new URL(val);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.toString();
+    }
+  } catch {
+    // Invalid URL
+  }
+  return fallback;
+}
+
+/**
+ * Kiểm tra đường dẫn ảnh an toàn: đường dẫn tương đối `/images/...` hoặc URL `https://` / `http://`.
+ */
+export function sanitizeImageUrl(raw: string | undefined | null, fallback: string): string {
+  const val = (raw || "").trim();
+  if (!val) return fallback;
+  if (val.startsWith("/") && !val.startsWith("//")) {
+    return val;
+  }
+  return sanitizeExternalUrl(val, fallback);
+}
+
+/**
+ * Escape HTML chống HTML/XSS injection trong email & mẫu in.
+ */
+export function escapeHtml(raw: unknown): string {
+  return String(raw ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Che bớt số điện thoại khách hàng cho phản hồi công khai (VD: 0905***733).
+ */
+export function maskPhone(phone?: string | null): string {
+  const digits = (phone || "").replace(/\s+/g, "");
+  if (digits.length < 7) return "***";
+  return `${digits.slice(0, 4)}***${digits.slice(-3)}`;
+}
+
+/**
+ * Che bớt địa chỉ chi tiết cho phản hồi công khai không kèm trackingToken.
+ */
+export function maskAddress(address?: string | null): string {
+  const val = (address || "").trim();
+  if (!val) return "";
+  if (val.length <= 12) return "***";
+  return `${val.slice(0, 6)}...${val.slice(-6)}`;
+}
+

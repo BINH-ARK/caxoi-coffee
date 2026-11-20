@@ -55,11 +55,19 @@ function LoginFormContent() {
       }
 
       const role = data.user.role;
+      const isSafeRedirect =
+        /^\/(admin|kds)(\/[a-zA-Z0-9/_-]*)?$/.test(redirectPath) &&
+        !redirectPath.startsWith("//") &&
+        !redirectPath.includes("\\");
 
-      // Smart redirection
-      if (redirectPath) {
-        router.push(redirectPath);
-      } else if (role === "BARISTA") {
+      // Smart redirection (anti-open-redirect)
+      if (isSafeRedirect) {
+        if ((role === "BARISTA" || role === "CASHIER") && redirectPath.startsWith("/admin")) {
+          router.push("/kds");
+        } else {
+          router.push(redirectPath);
+        }
+      } else if (role === "BARISTA" || role === "CASHIER") {
         router.push("/kds");
       } else {
         router.push("/admin");

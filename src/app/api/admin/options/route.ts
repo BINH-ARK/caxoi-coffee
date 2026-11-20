@@ -5,8 +5,14 @@ import {
   updateOptionValueInSqlite,
   deleteOptionValueInSqlite,
 } from "@/lib/sqlite";
+import { requireStaffAuth } from "@/lib/serverAuth";
 
-export async function GET() {
+export const dynamic = "force-dynamic";
+
+export async function GET(request: Request) {
+  const auth = await requireStaffAuth(request, { permission: "menu.view" });
+  if (!auth.ok) return auth.response;
+
   try {
     const options = getProductOptionsFromSqlite();
     return NextResponse.json({ success: true, data: options });
@@ -19,6 +25,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireStaffAuth(request, { permission: "menu.edit_pricing" });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json();
     const { optionId, name, extraPrice = 0, isDefault = false } = body;
@@ -30,10 +39,18 @@ export async function POST(request: Request) {
       );
     }
 
+    const parsedExtra = Number(extraPrice) || 0;
+    if (!Number.isFinite(parsedExtra) || parsedExtra < 0) {
+      return NextResponse.json(
+        { success: false, message: "Phụ thu không được âm." },
+        { status: 400 }
+      );
+    }
+
     const success = createOptionValueInSqlite({
       optionId: Number(optionId),
       name: name.trim(),
-      extraPrice: Number(extraPrice) || 0,
+      extraPrice: Math.round(parsedExtra),
       isDefault: Boolean(isDefault),
     });
 
@@ -59,6 +76,9 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const auth = await requireStaffAuth(request, { permission: "menu.edit_pricing" });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json();
     const { id, name, extraPrice, isDefault, displayOrder } = body;
@@ -70,9 +90,16 @@ export async function PATCH(request: Request) {
       );
     }
 
+    if (extraPrice !== undefined && (!Number.isFinite(Number(extraPrice)) || Number(extraPrice) < 0)) {
+      return NextResponse.json(
+        { success: false, message: "Phụ thu không hợp lệ." },
+        { status: 400 }
+      );
+    }
+
     const success = updateOptionValueInSqlite(Number(id), {
       name,
-      extraPrice,
+      extraPrice: extraPrice !== undefined ? Math.round(Number(extraPrice)) : undefined,
       isDefault,
       displayOrder,
     });
@@ -99,6 +126,9 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const auth = await requireStaffAuth(request, { permission: "menu.edit_pricing" });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(request.url);
     const idParam = searchParams.get("id");

@@ -116,6 +116,7 @@ export interface Order {
   shipperPhone?: string;
   estimatedDeliveryTime?: string;
   trackingNotes?: string;
+  trackingToken?: string;
   createdAt: string;
   updatedAt: string;
   items: OrderItemRecord[];
@@ -130,8 +131,11 @@ export interface GroupSession {
   status: 'OPEN' | 'LOCKED' | 'ORDERED' | 'EXPIRED';
   expiresAt: string;
   createdAt: string;
+  hostToken?: string;
   items: CartItem[];
 }
+
+export type ShippingFeeMode = 'AUTO' | 'MANUAL_ZERO';
 
 export interface BusinessSettings {
   storeName: string;
@@ -140,6 +144,7 @@ export interface BusinessSettings {
   hotline: string;
   openTime: string;
   closeTime: string;
+  shippingFeeMode: ShippingFeeMode;
   baseDeliveryFee: number;
   freeDeliveryMinCups: number;
   maxSlotCapacityCups: number;
@@ -196,11 +201,12 @@ export interface StaffAccount {
   phone?: string;
   email?: string;
   pin?: string;
+  hasPin?: boolean;
   isActive: boolean;
   createdAt: string;
 }
 
-export type DiscountType = 'PERCENTAGE' | 'FIXED';
+export type DiscountType = 'PERCENTAGE' | 'FIXED' | 'FREESHIP';
 
 export interface Promotion {
   id: number;
@@ -211,4 +217,8 @@ export interface Promotion {
   minOrderAmount: number;
   isActive: boolean;
   maxDiscountAmount?: number | null;
+  usageLimit?: number | null;
+  usedCount?: number;
+  startTime?: string | null;
+  endTime?: string | null;
 }

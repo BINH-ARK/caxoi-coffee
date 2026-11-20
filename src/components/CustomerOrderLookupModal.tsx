@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Order } from "@/types";
 import { formatVND } from "@/lib/utils";
+import { useBusinessSettings } from "@/lib/useBusinessSettings";
 
 interface CustomerOrderLookupModalProps {
   isOpen: boolean;
@@ -36,10 +37,12 @@ export default function CustomerOrderLookupModal({
   isOpen,
   onClose,
 }: CustomerOrderLookupModalProps) {
+  const settings = useBusinessSettings();
   const [query, setQuery] = useState("");
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     if (isOpen) {
@@ -49,6 +52,7 @@ export default function CustomerOrderLookupModal({
         handleSearch(savedPhone);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -60,24 +64,30 @@ export default function CustomerOrderLookupModal({
     try {
       setLoading(true);
       setSearched(true);
-      const isPhone = /^[0-9+]+$/.test(q);
+      setErrorMsg("");
+
+      const cleanDigits = q.replace(/[\s.-]/g, "");
+      const isPhone = /^0?\d{9,11}$/.test(cleanDigits);
+      const cleanOrderCode = q.replace(/^#/, "").trim();
       const url = isPhone
-        ? `/api/orders?phone=${encodeURIComponent(q)}`
-        : `/api/orders?search=${encodeURIComponent(q)}`;
+        ? `/api/orders?phone=${encodeURIComponent(cleanDigits)}`
+        : `/api/orders?orderCode=${encodeURIComponent(cleanOrderCode)}`;
 
       const res = await fetch(url);
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
         setOrders(data.data);
         if (isPhone) {
-          localStorage.setItem("caxoi_customer_phone", q);
+          localStorage.setItem("caxoi_customer_phone", cleanDigits);
         }
       } else {
         setOrders([]);
+        if (data.message) setErrorMsg(data.message);
       }
     } catch (e) {
       console.error("Lỗi tra cứu đơn:", e);
       setOrders([]);
+      setErrorMsg("Không thể kết nối máy chủ lúc này.");
     } finally {
       setLoading(false);
     }
@@ -105,8 +115,14 @@ export default function CustomerOrderLookupModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-      <div className="bg-white rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Modal Header */}
         <div className="bg-gradient-to-r from-coffee-950 via-coffee-900 to-coffee-800 text-white p-5 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -141,7 +157,7 @@ export default function CustomerOrderLookupModal({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Nhập Số điện thoại đặt hàng hoặc Mã đơn (CX-...)"
+                placeholder="Nhập đúng Số điện thoại (VD: 0905...) hoặc Mã đơn (CF...)"
                 className="w-full bg-white border border-stone-300 rounded-xl pl-9 pr-3 py-2 text-sm text-coffee-950 focus:outline-none focus:border-caramel shadow-inner"
               />
             </div>
@@ -153,6 +169,9 @@ export default function CustomerOrderLookupModal({
               {loading ? "Đang tìm..." : "Tra cứu"}
             </button>
           </form>
+          {errorMsg && (
+            <p className="text-[11px] text-rose-700 font-semibold mt-2">{errorMsg}</p>
+          )}
         </div>
 
         {/* Content Body */}
@@ -318,7 +337,7 @@ export default function CustomerOrderLookupModal({
 
         {/* Modal Footer */}
         <div className="p-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-stone-500">
-          <span>Hotline hỗ trợ: <strong>0905 249 733</strong></span>
+          <span>Hotline hỗ trợ: <strong>{settings.hotline || "0905 249 733"}</strong></span>
           <button
             onClick={onClose}
             className="px-4 py-1.5 rounded-xl bg-stone-200 hover:bg-stone-300 text-stone-800 font-bold"

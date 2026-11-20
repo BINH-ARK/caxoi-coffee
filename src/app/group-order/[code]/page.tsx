@@ -30,8 +30,17 @@ import {
   ExternalLink,
   Flame,
 } from "lucide-react";
-import { GroupSession, Product, ProductOption, Category, CartItem, OrderItemRecord } from "@/types";
+import {
+  GroupSession,
+  Product,
+  ProductOption,
+  Category,
+  CartItem,
+  OrderItemRecord,
+  BusinessSettings,
+} from "@/types";
 import { formatVND, MIN_LY_ORDER, countLyItems, getMinLyValidationError } from "@/lib/utils";
+import { getBankById } from "@/lib/vietqr";
 import { useCart } from "@/context/CartContext";
 import ProductDetailModal from "@/components/ProductDetailModal";
 import CupStickerPreview from "@/components/CupStickerPreview";
@@ -43,6 +52,8 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
   const { addToCart, clearCart } = useCart();
 
   const [session, setSession] = useState<GroupSession | null>(null);
+  const [settings, setSettings] = useState<BusinessSettings>(INITIAL_SETTINGS);
+  const [hostToken, setHostToken] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -78,17 +89,35 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+    setTimeout(() => setToastMessage(null), 3500);
   };
 
   // Remaining time countdown
   const [timeLeftStr, setTimeLeftStr] = useState<string>("");
 
+  // Load saved hostToken for this room
+  useEffect(() => {
+    try {
+      const savedToken =
+        localStorage.getItem(`group_host_token_${code.toUpperCase()}`) || "";
+      if (savedToken) setHostToken(savedToken);
+    } catch {}
+  }, [code]);
+
   // Fetch group session
   const fetchSession = async (showSpin = false) => {
     if (showSpin) setIsRefreshing(true);
     try {
-      const res = await fetch(`/api/group-orders?code=${code}`);
+      let token = hostToken;
+      if (!token) {
+        try {
+          token = localStorage.getItem(`group_host_token_${code.toUpperCase()}`) || "";
+        } catch {}
+      }
+      const qs = new URLSearchParams({ code });
+      if (token) qs.set("hostToken", token);
+
+      const res = await fetch(`/api/group-orders?${qs.toString()}`, { cache: "no-store" });
       const data = await res.json();
       if (data.success) {
         setSession(data.data);
@@ -101,16 +130,17 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
     }
   };
 
-  // Fetch full live menu
+  // Fetch full live menu & live business settings
   useEffect(() => {
     const fetchMenu = async () => {
       try {
-        const res = await fetch("/api/menu");
+        const res = await fetch("/api/menu", { cache: "no-store" });
         const data = await res.json();
         if (data.success && data.data) {
           if (data.data.categories?.length) setCategories(data.data.categories);
           if (data.data.products?.length) setProducts(data.data.products);
           if (data.data.options?.length) setOptions(data.data.options);
+          if (data.data.settings) setSettings(data.data.settings);
         }
       } catch (e) {
         // Fallback to initial values
@@ -119,12 +149,13 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
     fetchMenu();
   }, []);
 
-  // Poll room every 4s
+  // Poll room every 4s while OPEN/LOCKED
   useEffect(() => {
     fetchSession();
     const interval = setInterval(() => fetchSession(false), 4000);
     return () => clearInterval(interval);
-  }, [code]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, hostToken]);
 
   // Load saved member name from localStorage
   useEffect(() => {
@@ -197,15 +228,22 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
     setGroupCheckoutError(null);
 
     try {
-      // 1. Lock room on server
-      await fetch("/api/group-orders", {
+      // 1. Lock room on server (yêu cầu hostToken của chủ phòng)
+      const res = await fetch("/api/group-orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "LOCK",
           sessionCode: session.sessionCode,
+          hostToken,
         }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setGroupCheckoutError(data.message || "Chỉ chủ phòng mới có quyền chốt đơn nhóm này.");
+        showToast(data.message || "Chỉ chủ phòng mới có quyền chốt đơn nhóm này.");
+        return;
+      }
 
       // 2. Put all group items into host's cart
       clearCart();
@@ -230,6 +268,7 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
       router.push("/cart");
     } catch (e) {
       console.error("Failed to lock group order", e);
+      showToast("Không thể kết nối máy chủ để chốt phòng.");
     }
   };
 
@@ -243,12 +282,15 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
           action: "REMOVE_ITEM",
           sessionCode: session.sessionCode,
           cartItemId,
+          hostToken,
         }),
       });
       const data = await res.json();
       if (data.success) {
         setSession(data.data);
         showToast("Đã xóa ly khỏi danh sách nhóm");
+      } else {
+        showToast(data.message || "Chỉ chủ phòng mới có quyền xóa món.");
       }
     } catch (e) {
       console.error(e);
@@ -300,6 +342,11 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
     return Object.values(map);
   }, [session]);
 
+  const bankInfo = getBankById(settings.vietqrBankId || "MB");
+  const bankDisplayName = bankInfo
+    ? `${bankInfo.shortName} (${bankInfo.name})`
+    : settings.vietqrBankId || "MB";
+
   // Format text for Zalo / Slack copy
   const handleCopyZaloSummary = () => {
     if (!session) return;
@@ -314,7 +361,7 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
     splitBillData.forEach((person, idx) => {
       const drinksSummary = person.items
-        .map((i) => `${i.product.name} (${i.variant.sizeName})`)
+        .map((i) => `${i.quantity > 1 ? `${i.quantity}x ` : ""}${i.product.name} (${i.variant.sizeName})`)
         .join(", ");
       lines.push(`${idx + 1}. ${person.recipient}: ${formatVND(person.totalAmount)} (${person.totalCups} ly)`);
       lines.push(`   └ Món: ${drinksSummary}`);
@@ -322,9 +369,9 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
     lines.push(`----------------------------------------`);
     lines.push(`💳 THÔNG TIN CHUYỂN KHOẢN:`);
-    lines.push(`Ngân hàng: ${INITIAL_SETTINGS.vietqrBankId} (MBBank)`);
-    lines.push(`Số tài khoản: ${INITIAL_SETTINGS.vietqrAccountNo}`);
-    lines.push(`Chủ TK: ${INITIAL_SETTINGS.vietqrAccountName}`);
+    lines.push(`Ngân hàng: ${bankDisplayName}`);
+    lines.push(`Số tài khoản: ${settings.vietqrAccountNo}`);
+    lines.push(`Chủ TK: ${settings.vietqrAccountName}`);
     lines.push(`Nội dung: ${session.sessionCode} [Tên của bạn]`);
 
     navigator.clipboard.writeText(lines.join("\n"));
@@ -377,12 +424,13 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
   const totalCups = session.items.reduce((sum, item) => sum + item.quantity, 0);
   const totalAmount = session.items.reduce((sum, item) => sum + item.totalPrice, 0);
-  const minCupsForFreeShip = INITIAL_SETTINGS.freeDeliveryMinCups || 3;
-  const isFreeShipEligible = totalCups >= minCupsForFreeShip;
+  const minCupsForFreeShip = settings.freeDeliveryMinCups || 3;
+  const isFreeShipEligible =
+    settings.shippingFeeMode === "MANUAL_ZERO" || totalCups >= minCupsForFreeShip;
   const cupsRemainingForFreeShip = Math.max(0, minCupsForFreeShip - totalCups);
 
   const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&margin=8&data=${encodeURIComponent(
-    typeof window !== "undefined" ? window.location.href : `https://thecornercafe.vn/group-order/${code}`
+    typeof window !== "undefined" ? window.location.href : `http://localhost:3000/group-order/${code}`
   )}`;
 
   return (
@@ -515,7 +563,11 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
             <Sparkles className="w-4 h-4 text-caramel" />
           </div>
           <div>
-            {isFreeShipEligible ? (
+            {settings.shippingFeeMode === "MANUAL_ZERO" ? (
+              <div className="font-bold text-amber-900">
+                Đơn nhóm tạm tính 0đ phí ship — Quán Cà Xòi sẽ liên hệ báo phí ship thực tế sau khi chốt đơn!
+              </div>
+            ) : isFreeShipEligible ? (
               <div className="font-bold text-emerald-700 flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 <span>Tuyệt vời! Đã gom đủ {totalCups} ly và được FREESHIP tòa nhà 100%!</span>
@@ -528,7 +580,7 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
                 <span className="text-coffee-700">
                   Cả phòng chỉ cần gom thêm{" "}
                   <strong className="text-caramel font-extrabold">{cupsRemainingForFreeShip} ly</strong>{" "}
-                  nữa để được <strong>MIỄN PHÍ SHIP</strong> (tiết kiệm 15.000đ)!
+                  nữa để được <strong>MIỄN PHÍ SHIP</strong> (tiết kiệm {formatVND(settings.baseDeliveryFee || 15000)})!
                 </span>
               </div>
             )}
@@ -669,18 +721,24 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
                 <div
                   key={p.id}
                   onClick={() => {
+                    if (!p.isAvailable) return;
                     setSelectedProduct(p);
                     setIsAddingModalOpen(true);
                   }}
-                  className="bg-white rounded-2xl border border-coffee-200/90 hover:border-caramel p-2.5 flex flex-col justify-between shadow-xs hover:shadow-md hover:bg-amber-50/20 transition-all cursor-pointer group"
+                  className={`bg-white rounded-2xl border border-coffee-200/90 p-2.5 flex flex-col justify-between shadow-xs transition-all group ${
+                    p.isAvailable
+                      ? "hover:border-caramel hover:shadow-md hover:bg-amber-50/20 cursor-pointer"
+                      : "opacity-55 cursor-not-allowed"
+                  }`}
                 >
                   <div>
                     {/* Thumbnail Image */}
                     <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-coffee-50 mb-2">
                       <Image
-                        src={p.imageUrl}
+                        src={p.imageUrl || "/images/ca-xoi-logo.jpg"}
                         alt={p.name}
                         fill
+                        unoptimized
                         sizes="(max-width: 640px) 50vw, 25vw"
                         className="object-cover group-hover:scale-105 transition-transform duration-300"
                       />
@@ -703,6 +761,12 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
                         )}
                       </div>
 
+                      {!p.isAvailable && (
+                        <div className="absolute inset-0 bg-black/45 flex items-center justify-center text-white text-[11px] font-bold z-10">
+                          Tạm hết món
+                        </div>
+                      )}
+
                       <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[9px] px-1 rounded flex items-center gap-0.5">
                         <Clock className="w-2.5 h-2.5" /> {p.prepTimeMinutes}p
                       </div>
@@ -723,9 +787,10 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
                   <button
                     type="button"
-                    className="mt-2.5 w-full py-1.5 px-2 rounded-xl bg-amber-50 group-hover:bg-caramel group-hover:text-white text-coffee-800 text-[11px] font-bold transition-colors flex items-center justify-center gap-1"
+                    disabled={!p.isAvailable}
+                    className="mt-2.5 w-full py-1.5 px-2 rounded-xl bg-amber-50 group-hover:bg-caramel group-hover:text-white text-coffee-800 text-[11px] font-bold transition-colors flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Plus className="w-3.5 h-3.5" /> Chọn ly này
+                    <Plus className="w-3.5 h-3.5" /> {p.isAvailable ? "Chọn ly này" : "Tạm hết"}
                   </button>
                 </div>
               );
@@ -1025,11 +1090,11 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
                 <div>
                   <span className="text-coffee-500">Ngân hàng:</span>{" "}
-                  <strong>{INITIAL_SETTINGS.vietqrBankId} (MBBank)</strong>
+                  <strong>{bankDisplayName}</strong>
                 </div>
                 <div>
                   <span className="text-coffee-500">Số tài khoản:</span>{" "}
-                  <strong className="font-mono text-caramel font-bold">{INITIAL_SETTINGS.vietqrAccountNo}</strong>
+                  <strong className="font-mono text-caramel font-bold">{settings.vietqrAccountNo}</strong>
                 </div>
                 <div>
                   <span className="text-coffee-500">Nội dung CK:</span>{" "}
@@ -1043,46 +1108,61 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
         {/* TAB 3: STICKERS PREVIEW */}
         {activeTab === "STICKERS" && (
           <div className="space-y-4">
-            <div className="bg-amber-50/70 p-3.5 rounded-2xl border border-amber-200/80 text-xs text-coffee-700">
-              <p className="font-bold text-coffee-900">
-                Tem in nhiệt dán cốc pha chế của Barista ({totalCups} tem):
-              </p>
-              <p className="text-[11px] text-coffee-500 mt-0.5">
-                Mỗi ly khi quán pha chế sẽ được in riêng 1 tem dán trực tiếp lên thân ly để đồng nghiệp nhận đúng món của mình.
-              </p>
+            <div className="bg-amber-50/70 p-3.5 rounded-2xl border border-amber-200/80 text-xs text-coffee-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <p className="font-bold text-coffee-900">
+                  Tem in nhiệt dán cốc pha chế của Barista ({totalCups} tem):
+                </p>
+                <p className="text-[11px] text-coffee-500 mt-0.5">
+                  Mỗi ly khi quán pha chế sẽ được in riêng 1 tem dán trực tiếp lên thân ly để đồng nghiệp nhận đúng món của mình.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1.5 bg-coffee-800 hover:bg-coffee-900 text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow-sm shrink-0"
+              >
+                <Printer className="w-3.5 h-3.5 text-amber-300" />
+                <span>In tất cả {totalCups} tem</span>
+              </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
-              {session.items.map((item) => {
-                const orderRecord: OrderItemRecord = {
-                  id: item.cartItemId,
-                  orderId: session.sessionCode,
-                  productId: item.product.id,
-                  productName: item.product.name,
-                  variantName: item.variant.sizeName,
-                  quantity: item.quantity,
-                  unitPrice: item.unitPrice,
-                  totalPrice: item.totalPrice,
-                  recipientLabel: item.recipientLabel,
-                  itemNotes: item.notes,
-                  options: item.selectedOptions.map((o) => ({
-                    optionName: o.optionName,
-                    valueName: o.valueName,
-                    price: o.extraPrice,
-                  })),
-                };
+            <div className="printable-area grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+              {session.items.flatMap((item) =>
+                Array.from({ length: Math.max(1, item.quantity) }).map((_, cupIdx) => {
+                  const orderRecord: OrderItemRecord = {
+                    id: `${item.cartItemId}-${cupIdx}`,
+                    orderId: session.sessionCode,
+                    productId: item.product.id,
+                    productName: item.product.name,
+                    variantName: item.variant.sizeName,
+                    quantity: 1,
+                    unitPrice: item.unitPrice,
+                    totalPrice: item.unitPrice,
+                    recipientLabel:
+                      item.quantity > 1 && item.recipientLabel
+                        ? `${item.recipientLabel} (${cupIdx + 1}/${item.quantity})`
+                        : item.recipientLabel,
+                    itemNotes: item.notes,
+                    options: item.selectedOptions.map((o) => ({
+                      optionName: o.optionName,
+                      valueName: o.valueName,
+                      price: o.extraPrice,
+                    })),
+                  };
 
-                return (
-                  <div key={item.cartItemId} className="flex justify-center">
-                    <CupStickerPreview
-                      orderCode={session.sessionCode}
-                      item={orderRecord}
-                      createdAt={session.createdAt}
-                      onPrint={() => window.print()}
-                    />
-                  </div>
-                );
-              })}
+                  return (
+                    <div key={`${item.cartItemId}-${cupIdx}`} className="flex justify-center break-inside-avoid">
+                      <CupStickerPreview
+                        orderCode={session.sessionCode}
+                        item={orderRecord}
+                        createdAt={session.createdAt}
+                        onPrint={() => window.print()}
+                      />
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -1136,8 +1216,14 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
       {/* 5. MODAL QR CODE SHARING */}
       {isQrModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border border-coffee-100 space-y-5 text-center relative">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => setIsQrModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border border-coffee-100 space-y-5 text-center relative"
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
               type="button"
               onClick={() => setIsQrModalOpen(false)}
@@ -1201,8 +1287,14 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
 
       {/* 6. MODAL SINGLE CUP STICKER PREVIEW */}
       {stickerPreviewItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-3xl p-6 shadow-2xl border border-coffee-100 space-y-4 max-w-sm w-full text-center relative">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => setStickerPreviewItem(null)}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 shadow-2xl border border-coffee-100 space-y-4 max-w-sm w-full text-center relative"
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
               type="button"
               onClick={() => setStickerPreviewItem(null)}
@@ -1215,7 +1307,7 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
               Tem in nhiệt dán cốc (Xem trước)
             </h3>
 
-            <div className="flex justify-center py-2">
+            <div className="printable-area flex justify-center py-2">
               <CupStickerPreview
                 orderCode={session.sessionCode}
                 item={{
@@ -1281,9 +1373,12 @@ export default function GroupOrderPage({ params }: { params: { code: string } })
               if (data.success) {
                 setSession(data.data);
                 showToast(`Đã thêm ${item.product.name} cho ${memberName.trim() || "bạn"}!`);
+              } else {
+                showToast(data.message || "Không thể thêm món vào phòng lúc này.");
               }
             } catch (e) {
               console.error(e);
+              showToast("Lỗi kết nối khi thêm món.");
             }
             setIsAddingModalOpen(false);
             setSelectedProduct(null);

@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import crypto from "node:crypto";
 import {
   Product,
   Order,
@@ -15,9 +16,11 @@ import {
   StaffAccount,
   Promotion,
   DiscountType,
+  ShippingFeeMode,
 } from "@/types";
-import { INITIAL_SETTINGS } from "@/lib/store";
+import { INITIAL_CATEGORIES, INITIAL_PRODUCTS, INITIAL_SETTINGS } from "@/lib/store";
 import { parseProductTags } from "@/lib/utils";
+import { hashPassword, isScryptHash, safeEqualStrings } from "@/lib/password";
 
 export interface SqliteStatus {
   connected: boolean;
@@ -52,36 +55,86 @@ const PRIMARY_DB_FILE = path.join(DB_DIR, "caxoi_cafe.db");
 const MIRROR_DB_FILE = path.join(DB_DIR, "caxoi_cafe.sqlite");
 const SQL_SEED_FILE = path.join(DB_DIR, "sqlite_caxoi_cafe.sql");
 const BACKUPS_DIR = path.join(DB_DIR, "backups");
+const MAX_BACKUP_FILES = 30;
 
 let dbInstance: Database.Database | null = null;
-let lastSqlSeedMtime = 0;
 
 /**
- * Tự động kiểm tra xem tệp tin SQL có được sửa đổi bên ngoài hay không
- * Nếu người dùng vừa sửa file SQL, hệ thống tự động nạp dữ liệu mới vào caxoi_cafe.db
+ * Đã vô hiệu hóa cơ chế tự động DROP TABLE khi file .sql đổi mtime để bảo vệ tuyệt đối dữ liệu đơn hàng & tài khoản.
  */
 export function checkAndAutoSyncSqlite(): boolean {
-  try {
-    if (fs.existsSync(SQL_SEED_FILE)) {
-      const currentSqlMtime = fs.statSync(SQL_SEED_FILE).mtimeMs;
-      if (lastSqlSeedMtime > 0 && currentSqlMtime > lastSqlSeedMtime) {
-        console.log("[SQLite Auto-Sync] Phát hiện file SQL vừa được thay đổi! Đang tự động nạp lại CSDL...");
-        executeSqlSeedFile();
-        lastSqlSeedMtime = currentSqlMtime;
-        return true;
-      }
-      if (lastSqlSeedMtime === 0) {
-        lastSqlSeedMtime = currentSqlMtime;
-      }
-    }
-  } catch (err: any) {
-    console.error("[SQLite Auto-Sync] Lỗi kiểm tra đồng bộ:", err.message);
-  }
   return false;
 }
 
 /**
- * Thực thi toàn bộ tệp SQL vào cơ sở dữ liệu SQLite
+ * Chỉ nạp lại 5 món & 3 quy cách chuẩn Quán Cà Xòi (categories, products, product_variants) trong transaction.
+ * Tuyệt đối KHÔNG xóa orders, users, promotions, business_settings hay group_sessions.
+ */
+export function resetMenuTablesOnlyInSqlite(): boolean {
+  try {
+    const db = getSqliteDb();
+    const runReset = db.transaction(() => {
+      db.prepare("DELETE FROM product_variants").run();
+      db.prepare("DELETE FROM products").run();
+      db.prepare("DELETE FROM categories").run();
+
+      const catStmt = db.prepare(`
+        INSERT INTO categories (id, name, slug, description, image_url, display_order, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const c of INITIAL_CATEGORIES) {
+        catStmt.run(
+          c.id,
+          c.name,
+          c.slug,
+          c.description || "",
+          c.imageUrl || "",
+          c.displayOrder,
+          c.isActive ? 1 : 0
+        );
+      }
+
+      const prodStmt = db.prepare(`
+        INSERT INTO products (id, category_id, name, slug, description, image_url, base_price, sale_price, is_available, is_featured, prep_time_minutes, tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const varStmt = db.prepare(`
+        INSERT INTO product_variants (product_id, size_name, extra_price, is_default)
+        VALUES (?, ?, ?, ?)
+      `);
+
+      for (const p of INITIAL_PRODUCTS) {
+        prodStmt.run(
+          p.id,
+          p.categoryId,
+          p.name,
+          p.slug,
+          p.description || "",
+          p.imageUrl || "",
+          p.basePrice,
+          p.salePrice ?? null,
+          p.isAvailable ? 1 : 0,
+          p.isFeatured ? 1 : 0,
+          p.prepTimeMinutes || 4,
+          Array.isArray(p.tags) ? p.tags.join(",") : ""
+        );
+        for (const v of p.variants) {
+          varStmt.run(p.id, v.sizeName, v.extraPrice, v.isDefault ? 1 : 0);
+        }
+      }
+    });
+
+    runReset();
+    syncMirrorFile();
+    return true;
+  } catch (error) {
+    console.error("Lỗi khôi phục bảng thực đơn SQLite:", error);
+    return false;
+  }
+}
+
+/**
+ * Thực thi tệp SQL seed (chỉ dùng khi khởi tạo CSDL mới hoặc thao tác đặt lại toàn bộ từ SUPER_ADMIN).
  */
 export function executeSqlSeedFile(): boolean {
   try {
@@ -92,21 +145,28 @@ export function executeSqlSeedFile(): boolean {
     const sqlContent = fs.readFileSync(SQL_SEED_FILE, "utf-8");
     const db = getSqliteDb();
 
-    // Thực thi toàn bộ script SQL
     db.exec(sqlContent);
+    runNonDestructiveMigrations(db);
 
-    // Checkpoint WAL và copy sang mirror file để cả 2 file .db và .sqlite luôn đồng bộ
     try {
       db.pragma("wal_checkpoint(TRUNCATE)");
       fs.copyFileSync(PRIMARY_DB_FILE, MIRROR_DB_FILE);
     } catch {}
 
-    lastSqlSeedMtime = fs.statSync(SQL_SEED_FILE).mtimeMs;
     return true;
   } catch (error: any) {
     console.error("Lỗi thực thi SQL seed:", error);
     return false;
   }
+}
+
+function runNonDestructiveMigrations(db: Database.Database) {
+  ensureUsersSecurityColumns(db);
+  ensureBusinessSettingsColumns(db);
+  ensureOrdersColumns(db);
+  ensurePromotionsColumns(db);
+  ensureGroupSessionsColumns(db);
+  ensureWebhookTransactionsTable(db);
 }
 
 /**
@@ -140,33 +200,30 @@ export function getSqliteDb(): Database.Database {
     if (fs.existsSync(SQL_SEED_FILE)) {
       const sqlContent = fs.readFileSync(SQL_SEED_FILE, "utf-8");
       db.exec(sqlContent);
-      lastSqlSeedMtime = fs.statSync(SQL_SEED_FILE).mtimeMs;
       try {
         db.pragma("wal_checkpoint(TRUNCATE)");
         fs.copyFileSync(PRIMARY_DB_FILE, MIRROR_DB_FILE);
       } catch {}
     }
-  } else if (fs.existsSync(SQL_SEED_FILE)) {
-    lastSqlSeedMtime = fs.statSync(SQL_SEED_FILE).mtimeMs;
   }
 
-  // Đảm bảo cột email tồn tại trong bảng users (Safe non-destructive migration)
-  try {
-    const userTableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
-    if (userTableCheck) {
-      const userCols = db.prepare("PRAGMA table_info(users)").all() as any[];
-      if (userCols.length > 0 && !userCols.some((col: any) => col.name === "email")) {
-        db.exec("ALTER TABLE users ADD COLUMN email TEXT;");
-      }
-    }
-  } catch (err: any) {
-    console.error("[SQLite Migration] Lỗi kiểm tra cột email:", err.message);
-  }
-
-  ensureBusinessSettingsColumns(db);
+  runNonDestructiveMigrations(db);
 
   dbInstance = db;
   return dbInstance;
+}
+
+/**
+ * Đồng bộ WAL checkpoint chuẩn trước khi tải tệp .db về máy
+ */
+export function checkpointSqliteForDownload(): void {
+  try {
+    const db = getSqliteDb();
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    fs.copyFileSync(PRIMARY_DB_FILE, MIRROR_DB_FILE);
+  } catch (err) {
+    console.error("Lỗi checkpoint SQLite:", err);
+  }
 }
 
 /**
@@ -214,7 +271,7 @@ export function getSqliteStatus(): SqliteStatus {
 
     return {
       connected: true,
-      filePath: PRIMARY_DB_FILE,
+      filePath: "database/caxoi_cafe.db",
       fileName: "database/caxoi_cafe.db",
       fileSizeBytes,
       fileSizeFormatted: `${(fileSizeBytes / 1024).toFixed(1)} KB`,
@@ -236,12 +293,12 @@ export function getSqliteStatus(): SqliteStatus {
       },
       optimizedFor: "DB Browser for SQLite (https://sqlitebrowser.org)",
       sqlFileLastModified: sqlFileModifiedFormatted,
-      sqlFilePath: SQL_SEED_FILE,
+      sqlFilePath: "database/sqlite_caxoi_cafe.sql",
     };
   } catch (error: any) {
     return {
       connected: false,
-      filePath: PRIMARY_DB_FILE,
+      filePath: "database/caxoi_cafe.db",
       fileName: "database/caxoi_cafe.db",
       fileSizeBytes: 0,
       fileSizeFormatted: "0 KB",
@@ -380,44 +437,75 @@ export function updateProductInSqlite(product: Product): boolean {
   try {
     const db = getSqliteDb();
     const serializedTags = Array.isArray(product.tags) ? product.tags.join(",") : "";
-    const stmt = db.prepare(`
-      UPDATE products 
-      SET name = ?, description = ?, base_price = ?, sale_price = ?, is_available = ?, is_featured = ?, image_url = ?, category_id = ?, prep_time_minutes = ?, tags = ?
-      WHERE id = ?
-    `);
 
-    stmt.run(
-      product.name,
-      product.description,
-      product.basePrice,
-      product.salePrice || null,
-      product.isAvailable ? 1 : 0,
-      product.isFeatured ? 1 : 0,
-      product.imageUrl || "",
-      product.categoryId || 1,
-      product.prepTimeMinutes || 4,
-      serializedTags,
-      product.id
-    );
+    const runUpdate = db.transaction(() => {
+      db.prepare(`
+        UPDATE products 
+        SET name = ?, description = ?, base_price = ?, sale_price = ?, is_available = ?, is_featured = ?, image_url = ?, category_id = ?, prep_time_minutes = ?, tags = ?
+        WHERE id = ?
+      `).run(
+        product.name,
+        product.description,
+        product.basePrice,
+        product.salePrice || null,
+        product.isAvailable ? 1 : 0,
+        product.isFeatured ? 1 : 0,
+        product.imageUrl || "",
+        product.categoryId || 1,
+        product.prepTimeMinutes || 4,
+        serializedTags,
+        product.id
+      );
 
-    if (product.variants && product.variants.length > 0) {
-      // Thay thế chính xác toàn bộ variants theo cấu hình từ Admin (nếu xóa Ly thì lưu đúng các size còn lại)
-      db.prepare("DELETE FROM product_variants WHERE product_id = ?").run(product.id);
-      const vStmt = db.prepare(`
-        INSERT INTO product_variants (product_id, size_name, extra_price, is_default)
-        VALUES (?, ?, ?, ?)
-      `);
+      if (product.variants && product.variants.length > 0) {
+        const existingRows = db
+          .prepare("SELECT id, size_name FROM product_variants WHERE product_id = ?")
+          .all(product.id) as Array<{ id: number; size_name: string }>;
+        const existingById = new Map(existingRows.map((r) => [r.id, r]));
+        const keptIds = new Set<number>();
 
-      for (const v of product.variants) {
-        vStmt.run(
-          product.id,
-          v.sizeName.trim(),
-          Number(v.extraPrice) || 0,
-          v.isDefault ? 1 : 0
-        );
+        const updateVarStmt = db.prepare(`
+          UPDATE product_variants
+          SET size_name = ?, extra_price = ?, is_default = ?
+          WHERE id = ? AND product_id = ?
+        `);
+        const insertVarStmt = db.prepare(`
+          INSERT INTO product_variants (product_id, size_name, extra_price, is_default)
+          VALUES (?, ?, ?, ?)
+        `);
+
+        for (const v of product.variants) {
+          const cleanSize = v.sizeName.trim();
+          const extra = Number(v.extraPrice) || 0;
+          const isDef = v.isDefault ? 1 : 0;
+
+          if (v.id && existingById.has(v.id) && !keptIds.has(v.id)) {
+            updateVarStmt.run(cleanSize, extra, isDef, v.id, product.id);
+            keptIds.add(v.id);
+          } else {
+            const matchedByName = existingRows.find(
+              (r) => !keptIds.has(r.id) && r.size_name.trim().toLowerCase() === cleanSize.toLowerCase()
+            );
+            if (matchedByName) {
+              updateVarStmt.run(cleanSize, extra, isDef, matchedByName.id, product.id);
+              keptIds.add(matchedByName.id);
+            } else {
+              const res = insertVarStmt.run(product.id, cleanSize, extra, isDef);
+              keptIds.add(Number(res.lastInsertRowid));
+            }
+          }
+        }
+
+        const deleteVarStmt = db.prepare("DELETE FROM product_variants WHERE id = ? AND product_id = ?");
+        for (const row of existingRows) {
+          if (!keptIds.has(row.id)) {
+            deleteVarStmt.run(row.id, product.id);
+          }
+        }
       }
-    }
+    });
 
+    runUpdate();
     syncMirrorFile();
     return true;
   } catch (error) {
@@ -608,6 +696,9 @@ export function ensureBusinessSettingsColumns(db: Database.Database) {
     const columns = (db.pragma("table_info(business_settings)") || []) as any[];
     if (!Array.isArray(columns) || columns.length === 0) return;
     const colNames = columns.map((c) => c.name);
+    if (!colNames.includes("shipping_fee_mode")) {
+      db.exec("ALTER TABLE business_settings ADD COLUMN shipping_fee_mode TEXT DEFAULT 'AUTO'");
+    }
     for (const def of HERO_SETTINGS_COLUMNS) {
       if (!colNames.includes(def.col)) {
         db.exec(`ALTER TABLE business_settings ADD COLUMN ${def.col} TEXT DEFAULT NULL`);
@@ -620,13 +711,14 @@ export function ensureBusinessSettingsColumns(db: Database.Database) {
 
 export function getBusinessSettingsFromSqlite(): BusinessSettings {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
-    ensureBusinessSettingsColumns(db);
     const row: any = db.prepare("SELECT * FROM business_settings WHERE id = 1").get();
     if (!row) {
       return { ...INITIAL_SETTINGS };
     }
+
+    const shippingFeeMode: ShippingFeeMode =
+      row.shipping_fee_mode === "MANUAL_ZERO" ? "MANUAL_ZERO" : "AUTO";
 
     const result: BusinessSettings = {
       ...INITIAL_SETTINGS,
@@ -637,6 +729,7 @@ export function getBusinessSettingsFromSqlite(): BusinessSettings {
       hotline: row.hotline || row.phone || INITIAL_SETTINGS.hotline,
       openTime: row.open_time || INITIAL_SETTINGS.openTime,
       closeTime: row.close_time || INITIAL_SETTINGS.closeTime,
+      shippingFeeMode,
       baseDeliveryFee: Number(row.base_delivery_fee ?? row.default_delivery_fee ?? INITIAL_SETTINGS.baseDeliveryFee),
       freeDeliveryMinCups: Number(row.free_delivery_min_cups ?? INITIAL_SETTINGS.freeDeliveryMinCups),
       maxSlotCapacityCups: Number(row.max_slot_capacity_cups ?? row.max_orders_per_slot ?? INITIAL_SETTINGS.maxSlotCapacityCups),
@@ -668,6 +761,9 @@ export function updateBusinessSettingsInSqlite(updates: Partial<BusinessSettings
     ensureBusinessSettingsColumns(db);
     const current = getBusinessSettingsFromSqlite();
     const merged: BusinessSettings = { ...current, ...updates };
+    const safeMode: ShippingFeeMode =
+      merged.shippingFeeMode === "MANUAL_ZERO" ? "MANUAL_ZERO" : "AUTO";
+    merged.shippingFeeMode = safeMode;
 
     const assignments = [
       "store_name = ?",
@@ -677,6 +773,7 @@ export function updateBusinessSettingsInSqlite(updates: Partial<BusinessSettings
       "phone = ?",
       "open_time = ?",
       "close_time = ?",
+      "shipping_fee_mode = ?",
       "base_delivery_fee = ?",
       "free_delivery_min_cups = ?",
       "max_slot_capacity_cups = ?",
@@ -695,6 +792,7 @@ export function updateBusinessSettingsInSqlite(updates: Partial<BusinessSettings
       merged.hotline,
       merged.openTime,
       merged.closeTime,
+      safeMode,
       merged.baseDeliveryFee,
       merged.freeDeliveryMinCups,
       merged.maxSlotCapacityCups,
@@ -738,22 +836,130 @@ function ensureOrdersColumns(db: Database.Database) {
     if (!colNames.includes("tracking_notes")) {
       db.exec("ALTER TABLE orders ADD COLUMN tracking_notes TEXT DEFAULT NULL");
     }
+    if (!colNames.includes("tracking_token")) {
+      db.exec("ALTER TABLE orders ADD COLUMN tracking_token TEXT DEFAULT NULL");
+    }
   } catch (e) {
     console.error("Lỗi kiểm tra cấu trúc bảng orders:", e);
   }
+}
+
+function ensureWebhookTransactionsTable(db: Database.Database) {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS webhook_transactions (
+        tx_id TEXT PRIMARY KEY,
+        order_id TEXT NOT NULL,
+        order_code TEXT NOT NULL,
+        amount REAL NOT NULL,
+        gateway TEXT,
+        processed_at TEXT DEFAULT (datetime('now', 'localtime'))
+      )
+    `);
+  } catch (e) {
+    console.error("Lỗi tạo bảng webhook_transactions:", e);
+  }
+}
+
+export function hasWebhookTransactionInSqlite(txId: string): boolean {
+  try {
+    const db = getSqliteDb();
+    ensureWebhookTransactionsTable(db);
+    const row = db.prepare("SELECT tx_id FROM webhook_transactions WHERE tx_id = ? LIMIT 1").get(txId);
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
+
+export function recordWebhookTransactionInSqlite(
+  txId: string,
+  orderId: string,
+  orderCode: string,
+  amount: number,
+  gateway?: string
+): boolean {
+  try {
+    const db = getSqliteDb();
+    ensureWebhookTransactionsTable(db);
+    db.prepare(`
+      INSERT INTO webhook_transactions (tx_id, order_id, order_code, amount, gateway, processed_at)
+      VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+    `).run(txId, orderId, orderCode, amount, gateway || "VIETQR");
+    syncMirrorFile();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function mapOrderRow(o: any, itemRows: any[]): Order {
+  const items: OrderItemRecord[] = itemRows.map((i: any) => {
+    let opts = [];
+    try {
+      opts = JSON.parse(i.selected_options_json || "[]");
+    } catch {}
+    return {
+      id: i.id,
+      orderId: i.order_id,
+      productId: i.product_id,
+      productName: i.product_name,
+      variantName: i.variant_name,
+      quantity: Number(i.quantity),
+      unitPrice: Number(i.unit_price),
+      totalPrice: Number(i.total_price),
+      recipientLabel: i.recipient_label || undefined,
+      itemNotes: i.item_notes || undefined,
+      options: opts,
+    };
+  });
+
+  return {
+    id: o.id,
+    orderCode: o.order_code,
+    orderType: o.order_type,
+    status: o.status,
+    paymentStatus: o.payment_status,
+    paymentMethod: o.payment_method,
+    recipientName: o.recipient_name,
+    recipientPhone: o.recipient_phone,
+    companyName: o.company_name || undefined,
+    buildingName: o.building_name || undefined,
+    floorRoom: o.floor_room || undefined,
+    deliveryAddress: o.delivery_address || undefined,
+    deliveryNotes: o.delivery_notes || undefined,
+    scheduledType: o.scheduled_type || "ASAP",
+    scheduledTime: o.scheduled_time || undefined,
+    subtotalAmount: Number(o.subtotal_amount),
+    discountAmount: Number(o.discount_amount || 0),
+    deliveryFee: Number(o.delivery_fee || 0),
+    totalAmount: Number(o.total_amount),
+    promotionCode: o.promotion_code || undefined,
+    groupSessionId: o.group_session_id || undefined,
+    baristaNotes: o.barista_notes || undefined,
+    shipperName: o.shipper_name || undefined,
+    shipperPhone: o.shipper_phone || undefined,
+    estimatedDeliveryTime: o.estimated_delivery_time || undefined,
+    trackingNotes: o.tracking_notes || undefined,
+    trackingToken: o.tracking_token || undefined,
+    createdAt: o.created_at,
+    updatedAt: o.updated_at,
+    items,
+  };
 }
 
 export function getOrdersFromSqlite(filter?: {
   status?: string;
   orderType?: string;
   phone?: string;
+  exactPhone?: string;
+  exactOrderCode?: string;
   search?: string;
   date?: string; // 'TODAY' | 'YESTERDAY' | '7DAYS' | 'ALL'
+  limit?: number;
 }): Order[] {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
-    ensureOrdersColumns(db);
 
     let query = "SELECT * FROM orders";
     const params: any[] = [];
@@ -769,9 +975,18 @@ export function getOrdersFromSqlite(filter?: {
       params.push(filter.orderType);
     }
 
-    if (filter?.phone) {
+    if (filter?.exactPhone) {
+      const normalized = filter.exactPhone.replace(/[^\d+]/g, "");
+      conditions.push("REPLACE(REPLACE(REPLACE(recipient_phone, ' ', ''), '.', ''), '-', '') = ?");
+      params.push(normalized);
+    } else if (filter?.phone) {
       conditions.push("recipient_phone LIKE ?");
       params.push(`%${filter.phone}%`);
+    }
+
+    if (filter?.exactOrderCode) {
+      conditions.push("(LOWER(order_code) = LOWER(?) OR id = ?)");
+      params.push(filter.exactOrderCode.trim(), filter.exactOrderCode.trim());
     }
 
     if (filter?.search && filter.search.trim()) {
@@ -782,11 +997,11 @@ export function getOrdersFromSqlite(filter?: {
 
     if (filter?.date && filter.date !== "ALL") {
       if (filter.date === "TODAY") {
-        conditions.push("date(created_at) = date('now', 'localtime')");
+        conditions.push("date(created_at, 'localtime') = date('now', 'localtime')");
       } else if (filter.date === "YESTERDAY") {
-        conditions.push("date(created_at) = date('now', 'localtime', '-1 day')");
+        conditions.push("date(created_at, 'localtime') = date('now', 'localtime', '-1 day')");
       } else if (filter.date === "7DAYS") {
-        conditions.push("date(created_at) >= date('now', 'localtime', '-7 days')");
+        conditions.push("date(created_at, 'localtime') >= date('now', 'localtime', '-7 days')");
       }
     }
 
@@ -796,64 +1011,28 @@ export function getOrdersFromSqlite(filter?: {
 
     query += " ORDER BY created_at DESC";
 
+    if (filter?.limit && filter.limit > 0) {
+      query += " LIMIT ?";
+      params.push(Math.min(500, Math.floor(filter.limit)));
+    }
+
     const orderRows = db.prepare(query).all(...params) as any[];
-    const itemRows = db.prepare("SELECT * FROM order_items").all() as any[];
+    if (orderRows.length === 0) return [];
 
-    return orderRows.map((o: any) => {
-      const items: OrderItemRecord[] = itemRows
-        .filter((i: any) => i.order_id === o.id)
-        .map((i: any) => {
-          let opts = [];
-          try {
-            opts = JSON.parse(i.selected_options_json || "[]");
-          } catch {}
-          return {
-            id: i.id,
-            orderId: i.order_id,
-            productId: i.product_id,
-            productName: i.product_name,
-            variantName: i.variant_name,
-            quantity: Number(i.quantity),
-            unitPrice: Number(i.unit_price),
-            totalPrice: Number(i.total_price),
-            recipientLabel: i.recipient_label || undefined,
-            itemNotes: i.item_notes || undefined,
-            options: opts,
-          };
-        });
+    const orderIds = orderRows.map((o) => o.id);
+    const placeholders = orderIds.map(() => "?").join(", ");
+    const itemRows = db
+      .prepare(`SELECT * FROM order_items WHERE order_id IN (${placeholders})`)
+      .all(...orderIds) as any[];
 
-      return {
-        id: o.id,
-        orderCode: o.order_code,
-        orderType: o.order_type,
-        status: o.status,
-        paymentStatus: o.payment_status,
-        paymentMethod: o.payment_method,
-        recipientName: o.recipient_name,
-        recipientPhone: o.recipient_phone,
-        companyName: o.company_name || undefined,
-        buildingName: o.building_name || undefined,
-        floorRoom: o.floor_room || undefined,
-        deliveryAddress: o.delivery_address || undefined,
-        deliveryNotes: o.delivery_notes || undefined,
-        scheduledType: o.scheduled_type || "ASAP",
-        scheduledTime: o.scheduled_time || undefined,
-        subtotalAmount: Number(o.subtotal_amount),
-        discountAmount: Number(o.discount_amount || 0),
-        deliveryFee: Number(o.delivery_fee || 0),
-        totalAmount: Number(o.total_amount),
-        promotionCode: o.promotion_code || undefined,
-        groupSessionId: o.group_session_id || undefined,
-        baristaNotes: o.barista_notes || undefined,
-        shipperName: o.shipper_name || undefined,
-        shipperPhone: o.shipper_phone || undefined,
-        estimatedDeliveryTime: o.estimated_delivery_time || undefined,
-        trackingNotes: o.tracking_notes || undefined,
-        createdAt: o.created_at,
-        updatedAt: o.updated_at,
-        items,
-      };
-    });
+    const itemsByOrder = new Map<string, any[]>();
+    for (const item of itemRows) {
+      const bucket = itemsByOrder.get(item.order_id) || [];
+      bucket.push(item);
+      itemsByOrder.set(item.order_id, bucket);
+    }
+
+    return orderRows.map((o) => mapOrderRow(o, itemsByOrder.get(o.id) || []));
   } catch (error) {
     console.error("Lỗi lấy danh sách đơn hàng:", error);
     return [];
@@ -862,7 +1041,6 @@ export function getOrdersFromSqlite(filter?: {
 
 export function getOrderByIdFromSqlite(idOrCode: string): Order | null {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
     const row: any = db
       .prepare("SELECT * FROM orders WHERE id = ? OR LOWER(order_code) = LOWER(?) LIMIT 1")
@@ -874,125 +1052,121 @@ export function getOrderByIdFromSqlite(idOrCode: string): Order | null {
       .prepare("SELECT * FROM order_items WHERE order_id = ?")
       .all(row.id) as any[];
 
-    const items: OrderItemRecord[] = itemsRows.map((i) => {
-      let opts = [];
-      try {
-        opts = JSON.parse(i.selected_options_json || "[]");
-      } catch {}
-      return {
-        id: i.id,
-        orderId: i.order_id,
-        productId: i.product_id,
-        productName: i.product_name,
-        variantName: i.variant_name,
-        quantity: Number(i.quantity),
-        unitPrice: Number(i.unit_price),
-        totalPrice: Number(i.total_price),
-        recipientLabel: i.recipient_label || undefined,
-        itemNotes: i.item_notes || undefined,
-        options: opts,
-      };
-    });
-
-    return {
-      id: row.id,
-      orderCode: row.order_code,
-      orderType: row.order_type,
-      status: row.status,
-      paymentStatus: row.payment_status,
-      paymentMethod: row.payment_method,
-      recipientName: row.recipient_name,
-      recipientPhone: row.recipient_phone,
-      companyName: row.company_name || undefined,
-      buildingName: row.building_name || undefined,
-      floorRoom: row.floor_room || undefined,
-      deliveryAddress: row.delivery_address || undefined,
-      deliveryNotes: row.delivery_notes || undefined,
-      scheduledType: row.scheduled_type || "ASAP",
-      scheduledTime: row.scheduled_time || undefined,
-      subtotalAmount: Number(row.subtotal_amount),
-      discountAmount: Number(row.discount_amount || 0),
-      deliveryFee: Number(row.delivery_fee || 0),
-      totalAmount: Number(row.total_amount),
-      promotionCode: row.promotion_code || undefined,
-      groupSessionId: row.group_session_id || undefined,
-      baristaNotes: row.barista_notes || undefined,
-      shipperName: row.shipper_name || undefined,
-      shipperPhone: row.shipper_phone || undefined,
-      estimatedDeliveryTime: row.estimated_delivery_time || undefined,
-      trackingNotes: row.tracking_notes || undefined,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      items,
-    };
+    return mapOrderRow(row, itemsRows);
   } catch (error) {
     return null;
   }
 }
 
+function allocateNextOrderCodeTx(db: Database.Database): string {
+  const rows = db.prepare("SELECT order_code FROM orders WHERE order_code LIKE 'CF2611-%'").all() as Array<{
+    order_code: string;
+  }>;
+  let maxSeq = 0;
+  for (const r of rows) {
+    const match = String(r.order_code || "").match(/^CF2611-(\d+)$/i);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxSeq) maxSeq = num;
+    }
+  }
+  return `CF2611-${String(maxSeq + 1).padStart(3, "0")}`;
+}
+
 export function saveOrderToSqlite(order: Order): boolean {
   try {
     const db = getSqliteDb();
-    const insertOrder = db.prepare(`
-      INSERT INTO orders 
-      (id, order_code, order_type, recipient_name, recipient_phone, company_name, building_name, floor_room,
-       delivery_address, delivery_notes, scheduled_type, scheduled_time, subtotal_amount, discount_amount,
-       delivery_fee, total_amount, payment_method, payment_status, status, promotion_code, group_session_id,
-       barista_notes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    ensureOrdersColumns(db);
 
-    insertOrder.run(
-      order.id,
-      order.orderCode,
-      order.orderType,
-      order.recipientName,
-      order.recipientPhone,
-      order.companyName || "",
-      order.buildingName || "",
-      order.floorRoom || "",
-      order.deliveryAddress || "",
-      order.deliveryNotes || "",
-      order.scheduledType || "ASAP",
-      order.scheduledTime || null,
-      order.subtotalAmount,
-      order.discountAmount || 0,
-      order.deliveryFee || 0,
-      order.totalAmount,
-      order.paymentMethod,
-      order.paymentStatus,
-      order.status,
-      order.promotionCode || null,
-      order.groupSessionId || null,
-      order.baristaNotes || "",
-      order.createdAt || new Date().toISOString(),
-      order.updatedAt || new Date().toISOString()
-    );
+    const runSave = db.transaction(() => {
+      // Sinh mã đơn nguyên tử bên trong transaction để chống trùng UNIQUE khi nhiều khách đặt cùng lúc
+      let finalCode = order.orderCode;
+      if (!finalCode || db.prepare("SELECT id FROM orders WHERE LOWER(order_code) = LOWER(?)").get(finalCode)) {
+        finalCode = allocateNextOrderCodeTx(db);
+        order.orderCode = finalCode;
+      }
 
-    if (order.items && order.items.length > 0) {
-      const insertItem = db.prepare(`
-        INSERT INTO order_items
-        (id, order_id, product_id, product_name, variant_name, quantity, unit_price, total_price, recipient_label, item_notes, selected_options_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      if (!order.trackingToken) {
+        order.trackingToken = crypto.randomBytes(16).toString("hex");
+      }
+
+      const insertOrder = db.prepare(`
+        INSERT INTO orders 
+        (id, order_code, order_type, recipient_name, recipient_phone, company_name, building_name, floor_room,
+         delivery_address, delivery_notes, scheduled_type, scheduled_time, subtotal_amount, discount_amount,
+         delivery_fee, total_amount, payment_method, payment_status, status, promotion_code, group_session_id,
+         barista_notes, tracking_token, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      for (const item of order.items) {
-        insertItem.run(
-          item.id,
-          order.id,
-          item.productId,
-          item.productName,
-          item.variantName,
-          item.quantity,
-          item.unitPrice,
-          item.totalPrice,
-          item.recipientLabel || "",
-          item.itemNotes || "",
-          JSON.stringify(item.options || [])
-        );
-      }
-    }
+      insertOrder.run(
+        order.id,
+        finalCode,
+        order.orderType,
+        order.recipientName,
+        order.recipientPhone,
+        order.companyName || "",
+        order.buildingName || "",
+        order.floorRoom || "",
+        order.deliveryAddress || "",
+        order.deliveryNotes || "",
+        order.scheduledType || "ASAP",
+        order.scheduledTime || null,
+        order.subtotalAmount,
+        order.discountAmount || 0,
+        order.deliveryFee || 0,
+        order.totalAmount,
+        order.paymentMethod,
+        order.paymentStatus,
+        order.status,
+        order.promotionCode || null,
+        order.groupSessionId || null,
+        order.baristaNotes || "",
+        order.trackingToken,
+        order.createdAt || new Date().toISOString(),
+        order.updatedAt || new Date().toISOString()
+      );
 
+      if (order.items && order.items.length > 0) {
+        const insertItem = db.prepare(`
+          INSERT INTO order_items
+          (id, order_id, product_id, product_name, variant_name, quantity, unit_price, total_price, recipient_label, item_notes, selected_options_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const item of order.items) {
+          insertItem.run(
+            item.id,
+            order.id,
+            item.productId,
+            item.productName,
+            item.variantName,
+            item.quantity,
+            item.unitPrice,
+            item.totalPrice,
+            item.recipientLabel || "",
+            item.itemNotes || "",
+            JSON.stringify(item.options || [])
+          );
+        }
+      }
+
+      // Tăng lượt dùng voucher nếu đơn có áp dụng giảm giá thực tế
+      if (order.promotionCode && (order.discountAmount || 0) > 0) {
+        db.prepare(
+          "UPDATE promotions SET used_count = COALESCE(used_count, 0) + 1 WHERE UPPER(code) = UPPER(?)"
+        ).run(order.promotionCode);
+      }
+
+      // Đánh dấu phòng gom đơn đã đặt thành công
+      if (order.groupSessionId) {
+        db.prepare(
+          "UPDATE group_sessions SET status = 'ORDERED' WHERE id = ? OR UPPER(session_code) = UPPER(?)"
+        ).run(order.groupSessionId, order.groupSessionId);
+      }
+    });
+
+    runSave();
     syncMirrorFile();
     return true;
   } catch (error) {
@@ -1060,7 +1234,7 @@ export function updateOrderStatusInSqlite(
         params.push(options.deliveryNotes);
       }
       if (options.deliveryFee !== undefined) {
-        const fee = Number(options.deliveryFee) || 0;
+        const fee = Math.max(0, Number(options.deliveryFee) || 0);
         updates.push("delivery_fee = ?");
         params.push(fee);
         updates.push("total_amount = MAX(0, subtotal_amount + ? - discount_amount)");
@@ -1136,8 +1310,9 @@ export function updatePaymentStatusInSqlite(orderCodeOrId: string, paymentStatus
 export function getNextOrderSequence(): number {
   try {
     const db = getSqliteDb();
-    const row: any = db.prepare("SELECT COUNT(*) as c FROM orders").get();
-    return (row?.c || 0) + 1;
+    const code = allocateNextOrderCodeTx(db);
+    const match = code.match(/(\d+)$/);
+    return match ? parseInt(match[1], 10) : 1;
   } catch {
     return 1;
   }
@@ -1148,24 +1323,23 @@ export function getNextOrderSequence(): number {
 // ============================================================================
 export function getStatsFromSqlite(timeRange: string = "TODAY") {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
 
-    // Xác định điều kiện lọc thời gian theo timeRange
+    // Xác định điều kiện lọc thời gian theo múi giờ địa phương (localtime)
     let orderDateClause = "";
     let cupsDateClause = "";
     if (timeRange === "TODAY") {
-      orderDateClause = "AND DATE(created_at) = DATE('now', 'localtime')";
-      cupsDateClause = "AND DATE(o.created_at) = DATE('now', 'localtime')";
+      orderDateClause = "AND DATE(created_at, 'localtime') = DATE('now', 'localtime')";
+      cupsDateClause = "AND DATE(o.created_at, 'localtime') = DATE('now', 'localtime')";
     } else if (timeRange === "YESTERDAY") {
-      orderDateClause = "AND DATE(created_at) = DATE('now', '-1 day', 'localtime')";
-      cupsDateClause = "AND DATE(o.created_at) = DATE('now', '-1 day', 'localtime')";
+      orderDateClause = "AND DATE(created_at, 'localtime') = DATE('now', '-1 day', 'localtime')";
+      cupsDateClause = "AND DATE(o.created_at, 'localtime') = DATE('now', '-1 day', 'localtime')";
     } else if (timeRange === "LAST_7_DAYS") {
-      orderDateClause = "AND DATE(created_at) >= DATE('now', '-7 days', 'localtime')";
-      cupsDateClause = "AND DATE(o.created_at) >= DATE('now', '-7 days', 'localtime')";
+      orderDateClause = "AND DATE(created_at, 'localtime') >= DATE('now', '-7 days', 'localtime')";
+      cupsDateClause = "AND DATE(o.created_at, 'localtime') >= DATE('now', '-7 days', 'localtime')";
     } else if (timeRange === "THIS_MONTH") {
-      orderDateClause = "AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')";
-      cupsDateClause = "AND strftime('%Y-%m', o.created_at) = strftime('%Y-%m', 'now', 'localtime')";
+      orderDateClause = "AND strftime('%Y-%m', created_at, 'localtime') = strftime('%Y-%m', 'now', 'localtime')";
+      cupsDateClause = "AND strftime('%Y-%m', o.created_at, 'localtime') = strftime('%Y-%m', 'now', 'localtime')";
     }
     // Nếu timeRange === "ALL" thì không áp dụng điều kiện ngày
 
@@ -1271,7 +1445,7 @@ export function getStatsFromSqlite(timeRange: string = "TODAY") {
       percentage: totalRevenue > 0 ? Math.round((Number(item.revenue || 0) / totalRevenue) * 100) : 0,
     }));
 
-    // 6. Phân bổ đơn hàng theo khung giờ thực tế (07:00 - 22:00)
+    // 6. Phân bổ đơn hàng theo khung giờ thực tế giờ Việt Nam (07:00 - 22:00)
     const hoursList = [
       "07:00", "08:00", "09:00", "10:00", "11:00", "12:00",
       "13:00", "14:00", "15:00", "16:00", "17:00", "18:00",
@@ -1285,7 +1459,7 @@ export function getStatsFromSqlite(timeRange: string = "TODAY") {
 
     const hourlyRows = db.prepare(`
       SELECT 
-        strftime('%H:00', created_at) as hour,
+        strftime('%H:00', created_at, 'localtime') as hour,
         COUNT(*) as count,
         COALESCE(SUM(total_amount), 0) as revenue
       FROM orders
@@ -1379,15 +1553,43 @@ export function getStatsFromSqlite(timeRange: string = "TODAY") {
 // ============================================================================
 // 7. PHÒNG ĐẶT NHÓM CÔNG SỞ (GROUP SESSIONS)
 // ============================================================================
+function ensureGroupSessionsColumns(db: Database.Database) {
+  try {
+    const columns = (db.pragma("table_info(group_sessions)") || []) as any[];
+    if (!Array.isArray(columns) || columns.length === 0) return;
+    const colNames = columns.map((c) => c.name);
+    if (!colNames.includes("host_token")) {
+      db.exec("ALTER TABLE group_sessions ADD COLUMN host_token TEXT DEFAULT NULL");
+    }
+  } catch (e) {
+    console.error("Lỗi kiểm tra cấu trúc bảng group_sessions:", e);
+  }
+}
+
 export function getGroupSessionFromSqlite(code: string): GroupSession | null {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
+    ensureGroupSessionsColumns(db);
     const row: any = db
       .prepare("SELECT * FROM group_sessions WHERE UPPER(session_code) = UPPER(?) LIMIT 1")
       .get(code);
 
     if (!row) return null;
+
+    // Tự động chuyển sang EXPIRED nếu đã quá thời gian sống
+    let currentStatus = row.status;
+    if (
+      currentStatus === "OPEN" &&
+      row.expires_at &&
+      !Number.isNaN(new Date(row.expires_at).getTime()) &&
+      new Date(row.expires_at).getTime() <= Date.now()
+    ) {
+      currentStatus = "EXPIRED";
+      try {
+        db.prepare("UPDATE group_sessions SET status = 'EXPIRED' WHERE id = ?").run(row.id);
+        syncMirrorFile();
+      } catch {}
+    }
 
     const itemRows = db
       .prepare("SELECT * FROM group_session_items WHERE UPPER(session_code) = UPPER(?) ORDER BY created_at ASC")
@@ -1423,8 +1625,9 @@ export function getGroupSessionFromSqlite(code: string): GroupSession | null {
       sessionCode: row.session_code,
       hostName: row.host_name,
       hostPhone: row.host_phone,
+      hostToken: row.host_token || undefined,
       buildingName: row.building_name || undefined,
-      status: row.status as any,
+      status: currentStatus as any,
       expiresAt: row.expires_at,
       createdAt: row.created_at,
       items,
@@ -1437,14 +1640,16 @@ export function getGroupSessionFromSqlite(code: string): GroupSession | null {
 export function createGroupSessionInSqlite(session: GroupSession): boolean {
   try {
     const db = getSqliteDb();
+    ensureGroupSessionsColumns(db);
     db.prepare(`
-      INSERT INTO group_sessions (id, session_code, host_name, host_phone, building_name, status, expires_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO group_sessions (id, session_code, host_name, host_phone, host_token, building_name, status, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       session.id,
       session.sessionCode.toUpperCase(),
       session.hostName,
       session.hostPhone,
+      session.hostToken || crypto.randomBytes(16).toString("hex"),
       session.buildingName || "",
       session.status || "OPEN",
       session.expiresAt,
@@ -1460,7 +1665,7 @@ export function createGroupSessionInSqlite(session: GroupSession): boolean {
 export function addGroupItemToSqlite(sessionCode: string, item: CartItem): boolean {
   try {
     const db = getSqliteDb();
-    const itemId = `item-g-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const itemId = `item-g-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
     const fullPayloadJson = JSON.stringify({
       ...item,
       cartItemId: itemId,
@@ -1495,7 +1700,7 @@ export function addGroupItemToSqlite(sessionCode: string, item: CartItem): boole
 export function lockGroupSessionInSqlite(sessionCode: string): boolean {
   try {
     const db = getSqliteDb();
-    db.prepare("UPDATE group_sessions SET status = 'LOCKED' WHERE UPPER(session_code) = UPPER(?)").run(sessionCode);
+    db.prepare("UPDATE group_sessions SET status = 'LOCKED' WHERE UPPER(session_code) = UPPER(?) AND status = 'OPEN'").run(sessionCode);
     syncMirrorFile();
     return true;
   } catch (error) {
@@ -1506,6 +1711,12 @@ export function lockGroupSessionInSqlite(sessionCode: string): boolean {
 export function removeGroupItemFromSqlite(sessionCode: string, cartItemId: string): boolean {
   try {
     const db = getSqliteDb();
+    const session: any = db
+      .prepare("SELECT status FROM group_sessions WHERE UPPER(session_code) = UPPER(?) LIMIT 1")
+      .get(sessionCode);
+    if (!session || session.status !== "OPEN") {
+      return false;
+    }
     db.prepare("DELETE FROM group_session_items WHERE UPPER(session_code) = UPPER(?) AND (cart_item_id = ? OR id = ?)").run(
       sessionCode,
       cartItemId,
@@ -1521,13 +1732,113 @@ export function removeGroupItemFromSqlite(sessionCode: string, cartItemId: strin
 // ============================================================================
 // 8. PHÂN QUYỀN & NHÂN VIÊN (RBAC: ROLES, PERMISSIONS & USERS)
 // ============================================================================
+
+export function ensureUsersSecurityColumns(db: Database.Database) {
+  try {
+    const userTableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
+    if (!userTableCheck) return;
+
+    const userCols = (db.pragma("table_info(users)") || []) as any[];
+    const colNames = userCols.map((c) => c.name);
+    if (!colNames.includes("email")) {
+      db.exec("ALTER TABLE users ADD COLUMN email TEXT;");
+    }
+    if (!colNames.includes("token_version")) {
+      db.exec("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1;");
+    }
+
+    // Tự động chuyển đổi mật khẩu plaintext hiện có sang băm scrypt an toàn và xóa plain_password
+    const rows = db.prepare(`
+      SELECT u.id, u.password_hash, u.plain_password, u.pin, r.name as role_name
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+    `).all() as any[];
+
+    const updatePwdStmt = db.prepare("UPDATE users SET password_hash = ?, plain_password = NULL WHERE id = ?");
+    const clearAdminPinStmt = db.prepare("UPDATE users SET pin = NULL WHERE id = ?");
+
+    let changed = false;
+    for (const u of rows) {
+      if (u.plain_password && String(u.plain_password).trim()) {
+        if (!isScryptHash(u.password_hash)) {
+          updatePwdStmt.run(hashPassword(String(u.plain_password).trim()), u.id);
+          changed = true;
+        } else {
+          db.prepare("UPDATE users SET plain_password = NULL WHERE id = ?").run(u.id);
+          changed = true;
+        }
+      }
+      // Không cho phép SUPER_ADMIN / STORE_MANAGER đăng nhập bằng PIN 4 số
+      if ((u.role_name === "SUPER_ADMIN" || u.role_name === "STORE_MANAGER") && u.pin) {
+        clearAdminPinStmt.run(u.id);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      syncMirrorFile();
+    }
+  } catch (err: any) {
+    console.error("[SQLite Migration] Lỗi nâng cấp bảo mật bảng users:", err.message);
+  }
+}
+
+export function getAuthUserByIdFromSqlite(userId: string): {
+  id: string;
+  username: string;
+  fullName: string;
+  role: "SUPER_ADMIN" | "STORE_MANAGER" | "BARISTA" | "CASHIER";
+  isActive: boolean;
+  tokenVersion: number;
+  permissions: string[];
+} | null {
+  try {
+    const db = getSqliteDb();
+    const row: any = db.prepare(`
+      SELECT u.id, u.username, u.full_name, u.is_active, u.token_version, r.name as role_name
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      WHERE u.id = ?
+      LIMIT 1
+    `).get(userId);
+
+    if (!row) return null;
+
+    const permRows = db
+      .prepare("SELECT permission_code FROM role_permissions WHERE role_name = ?")
+      .all(row.role_name) as Array<{ permission_code: string }>;
+
+    return {
+      id: row.id,
+      username: row.username,
+      fullName: row.full_name,
+      role: row.role_name,
+      isActive: Boolean(row.is_active),
+      tokenVersion: Number(row.token_version || 1),
+      permissions: permRows.map((p) => p.permission_code),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function incrementUserTokenVersionInSqlite(userId: string): boolean {
+  try {
+    const db = getSqliteDb();
+    db.prepare("UPDATE users SET token_version = COALESCE(token_version, 1) + 1 WHERE id = ?").run(userId);
+    syncMirrorFile();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getRolesAndPermissionsFromSqlite(): {
   definitions: PermissionDefinition[];
   roles: RolePermissionConfig[];
   staff: StaffAccount[];
 } {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
 
     // 1. Danh sách quyền hạn
@@ -1564,9 +1875,9 @@ export function getRolesAndPermissionsFromSqlite(): {
       };
     });
 
-    // 3. Danh sách tài khoản nhân viên
+    // 3. Danh sách tài khoản nhân viên (TUYỆT ĐỐI không trả raw pin hay password_hash)
     const userRows = db.prepare(`
-      SELECT u.*, r.name as role_name
+      SELECT u.id, u.username, u.full_name, u.phone, u.email, u.pin, u.is_active, u.created_at, r.name as role_name
       FROM users u
       JOIN roles r ON u.role_id = r.id
       ORDER BY u.created_at ASC
@@ -1579,7 +1890,7 @@ export function getRolesAndPermissionsFromSqlite(): {
       role: u.role_name as any,
       phone: u.phone || undefined,
       email: u.email || undefined,
-      pin: u.pin || undefined,
+      hasPin: Boolean(u.pin && String(u.pin).trim()),
       isActive: Boolean(u.is_active),
       createdAt: u.created_at,
     }));
@@ -1635,18 +1946,55 @@ export function updateStaffInSqlite(
     phone?: string;
     email?: string;
     password?: string;
-  }
-): boolean {
+  },
+  actorUserId?: string
+): { success: boolean; message?: string } {
   try {
     const db = getSqliteDb();
+    const target: any = db.prepare(`
+      SELECT u.id, u.is_active, r.name as role_name
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      WHERE u.id = ?
+      LIMIT 1
+    `).get(staffId);
+
+    if (!target) {
+      return { success: false, message: "Không tìm thấy tài khoản nhân viên." };
+    }
+
+    if (actorUserId && staffId === actorUserId && updates.isActive === false) {
+      return { success: false, message: "Không thể tự khóa tài khoản đang đăng nhập." };
+    }
+
+    const effectiveRole = updates.role || target.role_name;
+
+    // Bảo vệ tài khoản SUPER_ADMIN đang hoạt động cuối cùng
+    if (
+      target.role_name === "SUPER_ADMIN" &&
+      (updates.isActive === false || (updates.role && updates.role !== "SUPER_ADMIN"))
+    ) {
+      const activeSuperAdmins: any = db.prepare(`
+        SELECT COUNT(*) as count
+        FROM users u
+        JOIN roles r ON u.role_id = r.id
+        WHERE r.name = 'SUPER_ADMIN' AND u.is_active = 1
+      `).get();
+      if (activeSuperAdmins && activeSuperAdmins.count <= 1) {
+        return { success: false, message: "Không thể khóa hoặc hạ quyền Chủ Quán (SUPER_ADMIN) duy nhất đang hoạt động." };
+      }
+    }
+
     let roleId: number | null = null;
     if (updates.role) {
       const r: any = db.prepare("SELECT id FROM roles WHERE name = ?").get(updates.role);
-      if (r) roleId = r.id;
+      if (!r) return { success: false, message: "Vai trò không hợp lệ." };
+      roleId = r.id;
     }
 
     const fields: string[] = [];
     const values: any[] = [];
+    let shouldBumpTokenVersion = false;
 
     if (updates.fullName !== undefined) {
       fields.push("full_name = ?");
@@ -1655,14 +2003,23 @@ export function updateStaffInSqlite(
     if (roleId !== null) {
       fields.push("role_id = ?");
       values.push(roleId);
+      shouldBumpTokenVersion = true;
     }
-    if (updates.pin !== undefined) {
+    if (effectiveRole === "SUPER_ADMIN" || effectiveRole === "STORE_MANAGER") {
+      // Cấm dùng PIN 4 số cho tài khoản quản trị
+      fields.push("pin = NULL");
+    } else if (updates.pin !== undefined) {
+      const cleanPin = updates.pin.trim();
+      if (cleanPin && !/^\d{4,6}$/.test(cleanPin)) {
+        return { success: false, message: "Mã PIN KDS phải gồm 4 đến 6 chữ số." };
+      }
       fields.push("pin = ?");
-      values.push(updates.pin.trim() || null);
+      values.push(cleanPin || null);
     }
     if (updates.isActive !== undefined) {
       fields.push("is_active = ?");
       values.push(updates.isActive ? 1 : 0);
+      shouldBumpTokenVersion = true;
     }
     if (updates.phone !== undefined) {
       fields.push("phone = ?");
@@ -1673,26 +2030,40 @@ export function updateStaffInSqlite(
       values.push(updates.email.trim() || null);
     }
     if (updates.password !== undefined && updates.password.trim()) {
-      fields.push("plain_password = ?");
-      values.push(updates.password.trim());
+      if (updates.password.trim().length < 6) {
+        return { success: false, message: "Mật khẩu mới phải có ít nhất 6 ký tự." };
+      }
+      fields.push("password_hash = ?");
+      values.push(hashPassword(updates.password.trim()));
+      fields.push("plain_password = NULL");
+      shouldBumpTokenVersion = true;
+    }
+    if (shouldBumpTokenVersion) {
+      fields.push("token_version = COALESCE(token_version, 1) + 1");
     }
 
-    if (fields.length === 0) return true;
+    if (fields.length === 0) return { success: true };
 
     values.push(staffId);
     db.prepare(`UPDATE users SET ${fields.join(", ")} WHERE id = ?`).run(...values);
     syncMirrorFile();
-    return true;
+    return { success: true };
   } catch (error) {
     console.error("Lỗi cập nhật nhân viên trong SQLite:", error);
-    return false;
+    return { success: false, message: "Lỗi cập nhật nhân viên trong SQLite." };
   }
 }
 
-export function deleteStaffInSqlite(staffId: string): { success: boolean; message: string } {
+export function deleteStaffInSqlite(
+  staffId: string,
+  actorUserId?: string
+): { success: boolean; message: string } {
   try {
     const db = getSqliteDb();
-    // Kiểm tra xem có phải tài khoản cuối cùng của SUPER_ADMIN không
+    if (actorUserId && staffId === actorUserId) {
+      return { success: false, message: "Không thể tự xóa tài khoản đang đăng nhập." };
+    }
+
     const targetUser: any = db.prepare(`
       SELECT u.*, r.name as role_name 
       FROM users u 
@@ -1722,7 +2093,7 @@ export function deleteStaffInSqlite(staffId: string): { success: boolean; messag
     return { success: true, message: `Đã xóa tài khoản "${targetUser.full_name}" thành công!` };
   } catch (error: any) {
     console.error("Lỗi xóa nhân viên trong SQLite:", error);
-    return { success: false, message: error.message || "Lỗi xóa tài khoản nhân viên." };
+    return { success: false, message: "Lỗi xóa tài khoản nhân viên." };
   }
 }
 
@@ -1734,36 +2105,47 @@ export function createStaffInSqlite(staff: {
   email?: string;
   pin?: string;
   password?: string;
-}): boolean {
+}): { success: boolean; message?: string } {
   try {
     const db = getSqliteDb();
     const r: any = db.prepare("SELECT id FROM roles WHERE name = ?").get(staff.role);
-    const roleId = r ? r.id : 3; // Default BARISTA
+    if (!r) {
+      return { success: false, message: "Vai trò không hợp lệ." };
+    }
 
-    const id = `staff-${Date.now()}`;
-    const defaultPasswordHash = "$2b$10$w82Qf0L1.Q4U3iA9gGgqveJqfQv8eXnFh/jK9GzJ6d0S/6hB3F7iO"; // Admin@123456
-    const plainPwd = staff.password?.trim() || "Caxoi@123";
+    const rawPwd = staff.password?.trim() || "";
+    if (rawPwd.length < 6) {
+      return { success: false, message: "Vui lòng nhập mật khẩu tối thiểu 6 ký tự cho nhân viên mới." };
+    }
+
+    const allowPin = staff.role === "BARISTA" || staff.role === "CASHIER";
+    const cleanPin = allowPin && staff.pin?.trim() ? staff.pin.trim() : null;
+    if (cleanPin && !/^\d{4,6}$/.test(cleanPin)) {
+      return { success: false, message: "Mã PIN KDS phải gồm 4 đến 6 chữ số." };
+    }
+
+    const id = `staff-${crypto.randomUUID()}`;
+    const pwdHash = hashPassword(rawPwd);
 
     db.prepare(`
-      INSERT INTO users (id, username, password_hash, plain_password, pin, full_name, phone, email, role_id, is_active, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now', 'localtime'))
+      INSERT INTO users (id, username, password_hash, plain_password, pin, full_name, phone, email, role_id, is_active, token_version, created_at)
+      VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 1, 1, datetime('now', 'localtime'))
     `).run(
       id,
       staff.username.trim().toLowerCase(),
-      defaultPasswordHash,
-      plainPwd,
-      staff.pin?.trim() || null,
+      pwdHash,
+      cleanPin,
       staff.fullName.trim(),
       staff.phone?.trim() || null,
       staff.email?.trim() || null,
-      roleId
+      r.id
     );
 
     syncMirrorFile();
-    return true;
+    return { success: true };
   } catch (error) {
     console.error("Lỗi tạo nhân viên trong SQLite:", error);
-    return false;
+    return { success: false, message: "Lỗi tạo tài khoản nhân viên trong SQLite." };
   }
 }
 
@@ -1798,29 +2180,50 @@ export function getNotificationStaffEmails(): { email: string; fullName: string;
 // ============================================================================
 // 9. XÁC THỰC ĐĂNG NHẬP NHÂN VIÊN
 // ============================================================================
-export function findUserInSqlite(usernameOrPin: string, isPin = false): any | null {
+export function findUserInSqlite(usernameOrPin: string, isPin = false): {
+  id: string;
+  username: string;
+  fullName: string;
+  role: "SUPER_ADMIN" | "STORE_MANAGER" | "BARISTA" | "CASHIER";
+  passwordHash: string;
+  tokenVersion: number;
+} | null {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
-    let row: any = null;
 
     if (isPin) {
-      row = db.prepare(`
-        SELECT u.*, r.name as role_name 
-        FROM users u 
-        JOIN roles r ON u.role_id = r.id 
-        WHERE u.pin = ? AND u.is_active = 1 
-        LIMIT 1
-      `).get(usernameOrPin);
-    } else {
-      row = db.prepare(`
-        SELECT u.*, r.name as role_name 
-        FROM users u 
-        JOIN roles r ON u.role_id = r.id 
-        WHERE LOWER(u.username) = LOWER(?) AND u.is_active = 1 
-        LIMIT 1
-      `).get(usernameOrPin);
+      // CHỈ cho phép BARISTA và CASHIER đăng nhập bằng PIN trên màn hình KDS
+      const rows = db.prepare(`
+        SELECT u.id, u.username, u.full_name, u.password_hash, u.pin, u.token_version, r.name as role_name
+        FROM users u
+        JOIN roles r ON u.role_id = r.id
+        WHERE u.is_active = 1
+          AND u.pin IS NOT NULL
+          AND TRIM(u.pin) != ''
+          AND r.name IN ('BARISTA', 'CASHIER')
+      `).all() as any[];
+
+      const inputPin = usernameOrPin.trim();
+      const matched = rows.find((row) => safeEqualStrings(String(row.pin).trim(), inputPin));
+      if (!matched) return null;
+
+      return {
+        id: matched.id,
+        username: matched.username,
+        fullName: matched.full_name,
+        role: matched.role_name,
+        passwordHash: matched.password_hash,
+        tokenVersion: Number(matched.token_version || 1),
+      };
     }
+
+    const row: any = db.prepare(`
+      SELECT u.id, u.username, u.full_name, u.password_hash, u.token_version, r.name as role_name
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      WHERE LOWER(u.username) = LOWER(?) AND u.is_active = 1
+      LIMIT 1
+    `).get(usernameOrPin.trim());
 
     if (row) {
       return {
@@ -1828,8 +2231,8 @@ export function findUserInSqlite(usernameOrPin: string, isPin = false): any | nu
         username: row.username,
         fullName: row.full_name,
         role: row.role_name,
-        plainPassword: row.plain_password,
-        pin: row.pin,
+        passwordHash: row.password_hash,
+        tokenVersion: Number(row.token_version || 1),
       };
     }
     return null;
@@ -1845,13 +2248,43 @@ export function findUserInSqlite(usernameOrPin: string, isPin = false): any | nu
 function ensurePromotionsColumns(db: Database.Database) {
   try {
     const columns = (db.pragma("table_info(promotions)") || []) as any[];
-    const colNames = Array.isArray(columns) ? columns.map((c) => c.name) : [];
+    if (!Array.isArray(columns) || columns.length === 0) return;
+    const colNames = columns.map((c) => c.name);
     if (!colNames.includes("max_discount_amount")) {
       db.exec("ALTER TABLE promotions ADD COLUMN max_discount_amount REAL DEFAULT NULL");
+    }
+    if (!colNames.includes("usage_limit")) {
+      db.exec("ALTER TABLE promotions ADD COLUMN usage_limit INTEGER DEFAULT NULL");
+    }
+    if (!colNames.includes("used_count")) {
+      db.exec("ALTER TABLE promotions ADD COLUMN used_count INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!colNames.includes("start_time")) {
+      db.exec("ALTER TABLE promotions ADD COLUMN start_time TEXT DEFAULT NULL");
+    }
+    if (!colNames.includes("end_time")) {
+      db.exec("ALTER TABLE promotions ADD COLUMN end_time TEXT DEFAULT NULL");
     }
   } catch (e) {
     // Schema will handle if table does not exist
   }
+}
+
+function mapPromotionRow(r: any): Promotion {
+  return {
+    id: r.id,
+    code: r.code,
+    name: r.name,
+    discountType: (r.discount_type || "PERCENTAGE") as DiscountType,
+    discountValue: Number(r.discount_value),
+    minOrderAmount: Number(r.min_order_amount || 0),
+    isActive: Boolean(r.is_active),
+    maxDiscountAmount: r.max_discount_amount != null ? Number(r.max_discount_amount) : null,
+    usageLimit: r.usage_limit != null ? Number(r.usage_limit) : null,
+    usedCount: Number(r.used_count || 0),
+    startTime: r.start_time || null,
+    endTime: r.end_time || null,
+  };
 }
 
 /**
@@ -1859,20 +2292,10 @@ function ensurePromotionsColumns(db: Database.Database) {
  */
 export function getPromotionsFromSqlite(): Promotion[] {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
     ensurePromotionsColumns(db);
     const rows = db.prepare("SELECT * FROM promotions ORDER BY id ASC").all() as any[];
-    return rows.map((r) => ({
-      id: r.id,
-      code: r.code,
-      name: r.name,
-      discountType: (r.discount_type || "PERCENTAGE") as DiscountType,
-      discountValue: Number(r.discount_value),
-      minOrderAmount: Number(r.min_order_amount || 0),
-      isActive: Boolean(r.is_active),
-      maxDiscountAmount: r.max_discount_amount != null ? Number(r.max_discount_amount) : null,
-    }));
+    return rows.map(mapPromotionRow);
   } catch (error: any) {
     console.error("Lỗi lấy danh sách khuyến mãi trong SQLite:", error);
     return [];
@@ -1884,23 +2307,13 @@ export function getPromotionsFromSqlite(): Promotion[] {
  */
 export function getPromotionByCodeFromSqlite(code: string): Promotion | null {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
     ensurePromotionsColumns(db);
     const cleanCode = (code || "").trim().toUpperCase();
     if (!cleanCode) return null;
     const row = db.prepare("SELECT * FROM promotions WHERE UPPER(code) = ? LIMIT 1").get(cleanCode) as any;
     if (!row) return null;
-    return {
-      id: row.id,
-      code: row.code,
-      name: row.name,
-      discountType: (row.discount_type || "PERCENTAGE") as DiscountType,
-      discountValue: Number(row.discount_value),
-      minOrderAmount: Number(row.min_order_amount || 0),
-      isActive: Boolean(row.is_active),
-      maxDiscountAmount: row.max_discount_amount != null ? Number(row.max_discount_amount) : null,
-    };
+    return mapPromotionRow(row);
   } catch (error: any) {
     console.error("Lỗi tìm kiếm khuyến mãi theo mã trong SQLite:", error);
     return null;
@@ -1918,9 +2331,11 @@ export function createPromotionInSqlite(data: {
   minOrderAmount: number;
   isActive?: boolean;
   maxDiscountAmount?: number | null;
+  usageLimit?: number | null;
+  startTime?: string | null;
+  endTime?: string | null;
 }): { success: boolean; promotion?: Promotion; message?: string } {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
     ensurePromotionsColumns(db);
 
@@ -1931,11 +2346,14 @@ export function createPromotionInSqlite(data: {
     if (!data.name || !data.name.trim()) {
       return { success: false, message: "Tên chương trình không được để trống" };
     }
-    if (data.discountValue <= 0) {
+    if (!Number.isFinite(data.discountValue) || data.discountValue <= 0) {
       return { success: false, message: "Giá trị giảm giá phải lớn hơn 0" };
     }
     if (data.discountType === "PERCENTAGE" && data.discountValue > 100) {
       return { success: false, message: "Phần trăm giảm giá không được vượt quá 100%" };
+    }
+    if (data.minOrderAmount < 0) {
+      return { success: false, message: "Giá trị đơn tối thiểu không được âm" };
     }
 
     const existing = db.prepare("SELECT id FROM promotions WHERE UPPER(code) = ?").get(cleanCode);
@@ -1945,10 +2363,11 @@ export function createPromotionInSqlite(data: {
 
     const isActiveVal = data.isActive !== false ? 1 : 0;
     const maxDiscount = data.maxDiscountAmount != null && data.maxDiscountAmount > 0 ? Number(data.maxDiscountAmount) : null;
+    const usageLimit = data.usageLimit != null && data.usageLimit > 0 ? Math.floor(Number(data.usageLimit)) : null;
 
     const result = db.prepare(`
-      INSERT INTO promotions (code, name, discount_type, discount_value, min_order_amount, is_active, max_discount_amount)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO promotions (code, name, discount_type, discount_value, min_order_amount, is_active, max_discount_amount, usage_limit, used_count, start_time, end_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
     `).run(
       cleanCode,
       data.name.trim(),
@@ -1956,7 +2375,10 @@ export function createPromotionInSqlite(data: {
       data.discountValue,
       data.minOrderAmount || 0,
       isActiveVal,
-      maxDiscount
+      maxDiscount,
+      usageLimit,
+      data.startTime || null,
+      data.endTime || null
     );
 
     syncMirrorFile();
@@ -1970,12 +2392,16 @@ export function createPromotionInSqlite(data: {
       minOrderAmount: data.minOrderAmount || 0,
       isActive: isActiveVal === 1,
       maxDiscountAmount: maxDiscount,
+      usageLimit,
+      usedCount: 0,
+      startTime: data.startTime || null,
+      endTime: data.endTime || null,
     };
 
     return { success: true, promotion: newPromotion, message: "Tạo mã khuyến mãi thành công" };
   } catch (error: any) {
     console.error("Lỗi tạo khuyến mãi trong SQLite:", error);
-    return { success: false, message: error.message || "Lỗi tạo khuyến mãi trong SQLite" };
+    return { success: false, message: "Lỗi tạo khuyến mãi trong SQLite" };
   }
 }
 
@@ -1992,10 +2418,12 @@ export function updatePromotionInSqlite(
     minOrderAmount: number;
     isActive: boolean;
     maxDiscountAmount: number | null;
+    usageLimit: number | null;
+    startTime: string | null;
+    endTime: string | null;
   }>
 ): { success: boolean; promotion?: Promotion; message?: string } {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
     ensurePromotionsColumns(db);
 
@@ -2015,17 +2443,43 @@ export function updatePromotionInSqlite(
     }
 
     const name = data.name !== undefined ? data.name.trim() : existing.name;
-    const discountType = data.discountType !== undefined ? data.discountType : existing.discount_type;
+    const discountType = (data.discountType !== undefined ? data.discountType : existing.discount_type) as DiscountType;
     const discountValue = data.discountValue !== undefined ? Number(data.discountValue) : Number(existing.discount_value);
     const minOrderAmount = data.minOrderAmount !== undefined ? Number(data.minOrderAmount) : Number(existing.min_order_amount);
     const isActiveVal = data.isActive !== undefined ? (data.isActive ? 1 : 0) : existing.is_active;
-    const maxDiscountAmount = data.maxDiscountAmount !== undefined ? (data.maxDiscountAmount != null && data.maxDiscountAmount > 0 ? Number(data.maxDiscountAmount) : null) : existing.max_discount_amount;
+    const maxDiscountAmount =
+      data.maxDiscountAmount !== undefined
+        ? data.maxDiscountAmount != null && data.maxDiscountAmount > 0
+          ? Number(data.maxDiscountAmount)
+          : null
+        : existing.max_discount_amount;
+    const usageLimit =
+      data.usageLimit !== undefined
+        ? data.usageLimit != null && data.usageLimit > 0
+          ? Math.floor(Number(data.usageLimit))
+          : null
+        : existing.usage_limit;
+    const startTime = data.startTime !== undefined ? data.startTime || null : existing.start_time;
+    const endTime = data.endTime !== undefined ? data.endTime || null : existing.end_time;
+
+    if (!name) {
+      return { success: false, message: "Tên chương trình không được để trống" };
+    }
+    if (!Number.isFinite(discountValue) || discountValue <= 0) {
+      return { success: false, message: "Giá trị giảm giá phải lớn hơn 0" };
+    }
+    if (discountType === "PERCENTAGE" && discountValue > 100) {
+      return { success: false, message: "Phần trăm giảm giá không được vượt quá 100%" };
+    }
+    if (!Number.isFinite(minOrderAmount) || minOrderAmount < 0) {
+      return { success: false, message: "Giá trị đơn tối thiểu không hợp lệ" };
+    }
 
     db.prepare(`
       UPDATE promotions
-      SET code = ?, name = ?, discount_type = ?, discount_value = ?, min_order_amount = ?, is_active = ?, max_discount_amount = ?
+      SET code = ?, name = ?, discount_type = ?, discount_value = ?, min_order_amount = ?, is_active = ?, max_discount_amount = ?, usage_limit = ?, start_time = ?, end_time = ?
       WHERE id = ?
-    `).run(code, name, discountType, discountValue, minOrderAmount, isActiveVal, maxDiscountAmount, id);
+    `).run(code, name, discountType, discountValue, minOrderAmount, isActiveVal, maxDiscountAmount, usageLimit, startTime, endTime, id);
 
     syncMirrorFile();
 
@@ -2038,12 +2492,16 @@ export function updatePromotionInSqlite(
       minOrderAmount,
       isActive: isActiveVal === 1,
       maxDiscountAmount,
+      usageLimit,
+      usedCount: Number(existing.used_count || 0),
+      startTime,
+      endTime,
     };
 
     return { success: true, promotion: updated, message: "Cập nhật mã khuyến mãi thành công" };
   } catch (error: any) {
     console.error("Lỗi cập nhật khuyến mãi trong SQLite:", error);
-    return { success: false, message: error.message || "Lỗi cập nhật khuyến mãi trong SQLite" };
+    return { success: false, message: "Lỗi cập nhật khuyến mãi trong SQLite" };
   }
 }
 
@@ -2052,7 +2510,6 @@ export function updatePromotionInSqlite(
  */
 export function togglePromotionInSqlite(id: number): { success: boolean; promotion?: Promotion; message?: string } {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
     ensurePromotionsColumns(db);
 
@@ -2068,20 +2525,11 @@ export function togglePromotionInSqlite(id: number): { success: boolean; promoti
     return {
       success: true,
       message: `Đã ${newStatus === 1 ? "kích hoạt" : "tắt"} mã ${existing.code}`,
-      promotion: {
-        id: existing.id,
-        code: existing.code,
-        name: existing.name,
-        discountType: existing.discount_type,
-        discountValue: Number(existing.discount_value),
-        minOrderAmount: Number(existing.min_order_amount),
-        isActive: newStatus === 1,
-        maxDiscountAmount: existing.max_discount_amount != null ? Number(existing.max_discount_amount) : null,
-      },
+      promotion: mapPromotionRow({ ...existing, is_active: newStatus }),
     };
   } catch (error: any) {
     console.error("Lỗi chuyển đổi trạng thái khuyến mãi:", error);
-    return { success: false, message: error.message || "Lỗi chuyển đổi trạng thái" };
+    return { success: false, message: "Lỗi chuyển đổi trạng thái" };
   }
 }
 
@@ -2090,7 +2538,6 @@ export function togglePromotionInSqlite(id: number): { success: boolean; promoti
  */
 export function deletePromotionInSqlite(id: number): { success: boolean; message?: string } {
   try {
-    checkAndAutoSyncSqlite();
     const db = getSqliteDb();
     const result = db.prepare("DELETE FROM promotions WHERE id = ?").run(id);
     syncMirrorFile();
@@ -2100,12 +2547,12 @@ export function deletePromotionInSqlite(id: number): { success: boolean; message
     return { success: false, message: "Không tìm thấy mã khuyến mãi để xóa" };
   } catch (error: any) {
     console.error("Lỗi xóa khuyến mãi trong SQLite:", error);
-    return { success: false, message: error.message || "Lỗi xóa mã khuyến mãi" };
+    return { success: false, message: "Lỗi xóa mã khuyến mãi" };
   }
 }
 
 /**
- * Tính toán mức giảm giá chính xác của voucher dựa trên giá trị đơn hàng và phí ship
+ * Tính toán mức giảm giá chính xác của voucher dựa trên giá trị đơn hàng, phí ship, thời hạn và giới hạn lượt dùng
  */
 export function calculatePromotionDiscount(
   promotion: Promotion,
@@ -2114,6 +2561,17 @@ export function calculatePromotionDiscount(
 ): { valid: boolean; discountAmount: number; message?: string } {
   if (!promotion.isActive) {
     return { valid: false, discountAmount: 0, message: `Mã "${promotion.code}" hiện đang tạm ngưng áp dụng.` };
+  }
+
+  const now = Date.now();
+  if (promotion.startTime && !Number.isNaN(new Date(promotion.startTime).getTime()) && now < new Date(promotion.startTime).getTime()) {
+    return { valid: false, discountAmount: 0, message: `Mã "${promotion.code}" chưa đến thời gian áp dụng.` };
+  }
+  if (promotion.endTime && !Number.isNaN(new Date(promotion.endTime).getTime()) && now > new Date(promotion.endTime).getTime()) {
+    return { valid: false, discountAmount: 0, message: `Mã "${promotion.code}" đã hết hạn sử dụng.` };
+  }
+  if (promotion.usageLimit != null && promotion.usageLimit > 0 && (promotion.usedCount || 0) >= promotion.usageLimit) {
+    return { valid: false, discountAmount: 0, message: `Mã "${promotion.code}" đã hết lượt sử dụng.` };
   }
 
   if (subtotalAmount < promotion.minOrderAmount) {
@@ -2126,19 +2584,25 @@ export function calculatePromotionDiscount(
   }
 
   let discount = 0;
-  if (promotion.discountType === "PERCENTAGE") {
+  const isFreeship =
+    promotion.discountType === "FREESHIP" || promotion.code.toUpperCase() === "FREESHIP";
+
+  if (isFreeship) {
+    if (deliveryFee <= 0) {
+      return {
+        valid: false,
+        discountAmount: 0,
+        message: `Đơn hàng hiện có phí giao hàng 0đ nên không áp dụng mã "${promotion.code}".`,
+      };
+    }
+    discount = Math.min(deliveryFee, promotion.discountValue);
+  } else if (promotion.discountType === "PERCENTAGE") {
     discount = Math.round(subtotalAmount * (promotion.discountValue / 100));
     if (promotion.maxDiscountAmount && promotion.maxDiscountAmount > 0) {
       discount = Math.min(discount, promotion.maxDiscountAmount);
     }
   } else {
-    // FIXED
-    // Trường hợp đặc biệt nếu là FREESHIP: giảm tối đa bằng phí ship hiện tại
-    if (promotion.code.toUpperCase() === "FREESHIP") {
-      discount = deliveryFee > 0 ? Math.min(deliveryFee, promotion.discountValue) : promotion.discountValue;
-    } else {
-      discount = promotion.discountValue;
-    }
+    discount = promotion.discountValue;
   }
 
   // Đảm bảo không giảm vượt quá tổng tiền món + ship
@@ -2164,43 +2628,138 @@ export function reloadSqliteDb(): Database.Database {
   return getSqliteDb();
 }
 
+const EXPORT_TABLES = [
+  "categories",
+  "products",
+  "product_variants",
+  "product_options",
+  "product_option_values",
+  "business_settings",
+  "companies",
+  "promotions",
+  "roles",
+  "permissions",
+  "role_permissions",
+  "users",
+  "orders",
+  "order_items",
+  "group_sessions",
+  "group_session_items",
+] as const;
+
+function sqlEscapeLiteral(val: unknown): string {
+  if (val === null || val === undefined) return "NULL";
+  if (typeof val === "number") return Number.isFinite(val) ? String(val) : "NULL";
+  if (typeof val === "boolean") return val ? "1" : "0";
+  return `'${String(val).replace(/'/g, "''")}'`;
+}
+
+/**
+ * Xuất bản sao lưu SQL từ DỮ LIỆU THỰC TẾ đang chạy trong SQLite (không dùng file seed tĩnh).
+ */
+export function exportLiveSqlDumpFromSqlite(): string {
+  const db = getSqliteDb();
+  const lines: string[] = [
+    "-- ============================================================================",
+    `-- CÀ XÒI COFFEE — LIVE SQLITE BACKUP DUMP (${new Date().toISOString()})`,
+    "-- ============================================================================",
+    "PRAGMA foreign_keys = OFF;",
+    "BEGIN TRANSACTION;",
+    "",
+  ];
+
+  for (const tbl of EXPORT_TABLES) {
+    try {
+      const cols = (db.pragma(`table_info("${tbl}")`) || []) as Array<{ name: string }>;
+      if (cols.length === 0) continue;
+      // Không xuất cột plain_password (đã ngừng dùng)
+      const colNames = cols.map((c) => c.name).filter((name) => name !== "plain_password");
+      const rows = db.prepare(`SELECT ${colNames.map((c) => `"${c}"`).join(", ")} FROM "${tbl}"`).all() as any[];
+
+      lines.push(`-- Table: ${tbl} (${rows.length} rows)`);
+      lines.push(`DELETE FROM "${tbl}";`);
+      for (const row of rows) {
+        const vals = colNames.map((c) => sqlEscapeLiteral(row[c])).join(", ");
+        lines.push(`INSERT INTO "${tbl}" (${colNames.map((c) => `"${c}"`).join(", ")}) VALUES (${vals});`);
+      }
+      lines.push("");
+    } catch {
+      // Skip unavailable table
+    }
+  }
+
+  lines.push("COMMIT;");
+  lines.push("PRAGMA foreign_keys = ON;");
+  return lines.join("\n");
+}
+
+function pruneOldBackupSnapshots() {
+  try {
+    if (!fs.existsSync(BACKUPS_DIR)) return;
+    const files = fs
+      .readdirSync(BACKUPS_DIR)
+      .filter((f) => f.endsWith(".db") || f.endsWith(".sqlite") || f.endsWith(".json") || f.endsWith(".sql"))
+      .map((f) => {
+        const fullPath = path.join(BACKUPS_DIR, f);
+        return { fullPath, mtime: fs.statSync(fullPath).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+
+    if (files.length > MAX_BACKUP_FILES) {
+      for (const old of files.slice(MAX_BACKUP_FILES)) {
+        try {
+          fs.unlinkSync(old.fullPath);
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+function resolveSafeBackupPath(filename: string, allowedExts: string[]): string | null {
+  if (!filename || typeof filename !== "string") return null;
+  const safeName = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, "");
+  if (!safeName || safeName !== path.basename(filename)) return null;
+  const lower = safeName.toLowerCase();
+  if (!allowedExts.some((ext) => lower.endsWith(ext))) return null;
+
+  if (!fs.existsSync(BACKUPS_DIR)) return null;
+  const candidate = path.join(BACKUPS_DIR, safeName);
+  if (!fs.existsSync(candidate)) return null;
+
+  const realDir = fs.realpathSync(BACKUPS_DIR);
+  const realTarget = fs.realpathSync(candidate);
+  if (!realTarget.startsWith(realDir + path.sep)) {
+    return null;
+  }
+  return realTarget;
+}
+
 /**
  * Xuất toàn bộ 16 bảng của hệ thống Cà Xòi Coffee ra đối tượng JSON đầy đủ
  */
 export function exportFullDatabaseToJson(): any {
-  checkAndAutoSyncSqlite();
   const db = getSqliteDb();
-
-  const tables = [
-    "categories",
-    "products",
-    "product_variants",
-    "product_options",
-    "product_option_values",
-    "business_settings",
-    "companies",
-    "promotions",
-    "roles",
-    "permissions",
-    "role_permissions",
-    "users",
-    "orders",
-    "order_items",
-    "group_sessions",
-    "group_session_items",
-  ];
-
   const exportData: Record<string, any[]> = {};
-  for (const tbl of tables) {
+
+  for (const tbl of EXPORT_TABLES) {
     try {
-      exportData[tbl] = db.prepare(`SELECT * FROM "${tbl}"`).all();
+      const rows = db.prepare(`SELECT * FROM "${tbl}"`).all() as any[];
+      if (tbl === "users") {
+        // Tuyệt đối không xuất plain_password hoặc pin dạng cleartext
+        exportData[tbl] = rows.map((u) => {
+          const { plain_password: _unusedPlain, ...rest } = u;
+          return { ...rest, plain_password: null };
+        });
+      } else {
+        exportData[tbl] = rows;
+      }
     } catch {
       exportData[tbl] = [];
     }
   }
 
   return {
-    version: "1.0",
+    version: "1.1",
     appName: "Cà Xòi Coffee",
     exportedAt: new Date().toISOString(),
     summary: {
@@ -2218,7 +2777,7 @@ export function exportFullDatabaseToJson(): any {
 }
 
 /**
- * Nhập dữ liệu từ tệp JSON vào SQLite
+ * Nhập dữ liệu từ tệp JSON vào SQLite (đối chiếu nghiêm ngặt tên cột theo PRAGMA table_info để chống SQL Injection)
  * @param jsonData Dữ liệu JSON chứa tables
  * @param mode "FULL" (toàn bộ CSDL) hoặc "MENU_ONLY" (chỉ thực đơn, size, topping, độ ngọt, đá)
  */
@@ -2244,26 +2803,7 @@ export function importFullDatabaseFromJson(
       "product_option_values",
     ];
 
-    const fullTables = [
-      "categories",
-      "products",
-      "product_variants",
-      "product_options",
-      "product_option_values",
-      "business_settings",
-      "companies",
-      "promotions",
-      "roles",
-      "permissions",
-      "role_permissions",
-      "users",
-      "orders",
-      "order_items",
-      "group_sessions",
-      "group_session_items",
-    ];
-
-    const targetTables = mode === "MENU_ONLY" ? menuTables : fullTables;
+    const targetTables = mode === "MENU_ONLY" ? menuTables : [...EXPORT_TABLES];
 
     const db = getSqliteDb();
 
@@ -2275,31 +2815,41 @@ export function importFullDatabaseFromJson(
     const runImport = db.transaction(() => {
       for (const tbl of targetTables) {
         const rows = tablesData[tbl];
-        if (Array.isArray(rows)) {
-          // Xóa dữ liệu cũ của bảng này
-          db.prepare(`DELETE FROM "${tbl}"`).run();
+        if (!Array.isArray(rows)) continue;
 
-          if (rows.length > 0) {
-            // Lấy danh sách cột từ hàng đầu tiên
-            const sample = rows[0];
-            const columns = Object.keys(sample);
-            const placeholders = columns.map(() => "?").join(", ");
-            const colNames = columns.map((c) => `"${c}"`).join(", ");
+        // Lấy danh sách cột thật từ PRAGMA table_info để chống SQL identifier injection
+        const tableInfo = (db.pragma(`table_info("${tbl}")`) || []) as Array<{ name: string }>;
+        const allowedColumns = new Set(tableInfo.map((c) => c.name));
+        if (allowedColumns.size === 0) continue;
+
+        db.prepare(`DELETE FROM "${tbl}"`).run();
+
+        if (rows.length > 0 && rows[0] && typeof rows[0] === "object") {
+          const rawKeys = Object.keys(rows[0]);
+          const validColumns = rawKeys.filter(
+            (c) => allowedColumns.has(c) && /^[a-z_][a-z0-9_]*$/i.test(c)
+          );
+
+          if (validColumns.length > 0) {
+            const placeholders = validColumns.map(() => "?").join(", ");
+            const colNames = validColumns.map((c) => `"${c}"`).join(", ");
             const insertStmt = db.prepare(
               `INSERT INTO "${tbl}" (${colNames}) VALUES (${placeholders})`
             );
 
             for (const r of rows) {
-              const values = columns.map((c) => (r[c] !== undefined ? r[c] : null));
+              if (!r || typeof r !== "object") continue;
+              const values = validColumns.map((c) => (r[c] !== undefined ? r[c] : null));
               insertStmt.run(...values);
             }
           }
-          stats[tbl] = rows.length;
         }
+        stats[tbl] = rows.length;
       }
     });
 
     runImport();
+    runNonDestructiveMigrations(db);
 
     db.pragma("foreign_keys = ON");
     db.pragma("wal_checkpoint(TRUNCATE)");
@@ -2317,7 +2867,7 @@ export function importFullDatabaseFromJson(
       const db = getSqliteDb();
       db.pragma("foreign_keys = ON");
     } catch {}
-    return { success: false, message: "Lỗi khôi phục dữ liệu: " + error.message };
+    return { success: false, message: "Lỗi khôi phục dữ liệu JSON. Vui lòng kiểm tra cấu trúc file sao lưu." };
   }
 }
 
@@ -2343,18 +2893,20 @@ export async function createDatabaseBackupSnapshot(label?: string): Promise<{
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
     const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const cleanLabel = label ? `_${label.replace(/[^a-zA-Z0-9_-]/g, "")}` : "";
+    const cleanLabel = label ? `_${label.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 30)}` : "";
     const filename = `caxoi_backup_${ts}${cleanLabel}.db`;
     const targetPath = path.join(BACKUPS_DIR, filename);
 
     // Online backup an toàn của better-sqlite3
     await db.backup(targetPath);
 
-    // Tạo thêm bản sao JSON đồng hành để có thể đọc/xem trực quan
+    // Tạo thêm bản sao JSON đồng hành để có thể khôi phục an toàn qua web
     const jsonFilename = `caxoi_backup_${ts}${cleanLabel}.json`;
     const jsonPath = path.join(BACKUPS_DIR, jsonFilename);
     const fullJson = exportFullDatabaseToJson();
     fs.writeFileSync(jsonPath, JSON.stringify(fullJson, null, 2), "utf-8");
+
+    pruneOldBackupSnapshots();
 
     const stat = fs.statSync(targetPath);
     const sizeKb = Math.round(stat.size / 1024);
@@ -2376,7 +2928,7 @@ export async function createDatabaseBackupSnapshot(label?: string): Promise<{
       sizeBytes: 0,
       sizeFormatted: "0 KB",
       createdAt: new Date().toISOString(),
-      message: "Lỗi tạo bản sao lưu: " + error.message,
+      message: "Lỗi tạo bản sao lưu hệ thống.",
     };
   }
 }
@@ -2426,19 +2978,18 @@ export function listDatabaseBackupSnapshots(): Array<{
 }
 
 /**
- * Xóa một bản sao lưu khỏi database/backups/
+ * Xóa một bản sao lưu khỏi database/backups/ (kiểm tra realpathSync & đuôi tệp hợp lệ)
  */
 export function deleteBackupSnapshot(filename: string): { success: boolean; message: string } {
   try {
-    const safeName = path.basename(filename);
-    const target = path.join(BACKUPS_DIR, safeName);
-    if (fs.existsSync(target)) {
-      fs.unlinkSync(target);
-      return { success: true, message: `Đã xóa bản sao lưu ${safeName} thành công!` };
+    const safePath = resolveSafeBackupPath(filename, [".db", ".sqlite", ".json", ".sql"]);
+    if (!safePath) {
+      return { success: false, message: "Không tìm thấy hoặc tệp sao lưu không hợp lệ" };
     }
-    return { success: false, message: "Không tìm thấy file sao lưu cần xóa" };
+    fs.unlinkSync(safePath);
+    return { success: true, message: `Đã xóa bản sao lưu ${path.basename(safePath)} thành công!` };
   } catch (error: any) {
-    return { success: false, message: "Lỗi xóa bản sao lưu: " + error.message };
+    return { success: false, message: "Lỗi xóa bản sao lưu." };
   }
 }
 
@@ -2450,35 +3001,47 @@ export async function restoreDatabaseFromBackupSnapshot(
   mode: "FULL" | "MENU_ONLY" = "FULL"
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const safeName = path.basename(filename);
-    const sourcePath = path.join(BACKUPS_DIR, safeName);
-
-    if (!fs.existsSync(sourcePath)) {
-      return { success: false, message: "Không tìm thấy file sao lưu trên hệ thống" };
+    const sourcePath = resolveSafeBackupPath(filename, [".json", ".db", ".sqlite"]);
+    if (!sourcePath) {
+      return {
+        success: false,
+        message: "Chỉ hỗ trợ khôi phục snapshot .json hoặc .db/.sqlite nội bộ trong thư mục backups.",
+      };
     }
+
+    const safeName = path.basename(sourcePath);
 
     // 1. Tự động chụp bản pre-backup trước khi khôi phục
     await createDatabaseBackupSnapshot("pre_restore");
 
-    // 2. Nếu file là JSON
-    if (safeName.endsWith(".json")) {
+    // 2. Nếu file là JSON (hỗ trợ cả FULL và MENU_ONLY)
+    if (safeName.toLowerCase().endsWith(".json")) {
       const content = fs.readFileSync(sourcePath, "utf-8");
       const parsed = JSON.parse(content);
       return importFullDatabaseFromJson(parsed, mode);
     }
 
-    // 3. Nếu file là SQL
-    if (safeName.endsWith(".sql")) {
-      const sqlContent = fs.readFileSync(sourcePath, "utf-8");
-      const db = getSqliteDb();
-      db.exec(sqlContent);
-      db.pragma("wal_checkpoint(TRUNCATE)");
-      syncMirrorFile();
-      return { success: true, message: `Đã khôi phục CSDL từ script ${safeName} thành công!` };
+    // 3. Nếu file là .db / .sqlite nội bộ: không cho phép dùng cho MENU_ONLY (vì file nhị phân thay toàn bộ DB)
+    if (mode === "MENU_ONLY") {
+      return {
+        success: false,
+        message: "Chế độ khôi phục Chỉ Thực Đơn (MENU_ONLY) chỉ hỗ trợ tệp sao lưu định dạng .json.",
+      };
     }
 
-    // 4. Nếu file là .db / .sqlite
-    reloadSqliteDb(); // Đóng kết nối
+    // Xác thực header SQLite trước khi thay thế
+    const headerBuf = Buffer.alloc(16);
+    const fd = fs.openSync(sourcePath, "r");
+    try {
+      fs.readSync(fd, headerBuf, 0, 16, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (headerBuf.toString("ascii", 0, 15) !== "SQLite format 3") {
+      return { success: false, message: "Tệp snapshot .db không đúng định dạng SQLite hợp lệ." };
+    }
+
+    reloadSqliteDb();
     if (dbInstance) {
       try {
         (dbInstance as any).close();
@@ -2489,7 +3052,6 @@ export async function restoreDatabaseFromBackupSnapshot(
     fs.copyFileSync(sourcePath, PRIMARY_DB_FILE);
     fs.copyFileSync(sourcePath, MIRROR_DB_FILE);
 
-    // Xóa WAL và SHM cũ nếu có
     try {
       fs.unlinkSync(PRIMARY_DB_FILE + "-wal");
     } catch {}
@@ -2506,12 +3068,13 @@ export async function restoreDatabaseFromBackupSnapshot(
     };
   } catch (error: any) {
     console.error("Lỗi khôi phục từ snapshot:", error);
-    return { success: false, message: "Lỗi khôi phục: " + error.message };
+    return { success: false, message: "Lỗi khôi phục bản sao lưu." };
   }
 }
 
 /**
- * Khôi phục CSDL từ Buffer tệp tin được tải lên qua Web
+ * Khôi phục CSDL từ Buffer tệp tin được tải lên qua Web.
+ * Vì lý do bảo mật (chống thực thi SQL tùy ý / ghi đè file nhị phân chưa kiểm chứng), chỉ chấp nhận tệp .json hợp lệ và kiểm tra TRƯỚC khi lưu.
  */
 export async function restoreDatabaseFromUploadedBuffer(
   buffer: Buffer,
@@ -2519,74 +3082,43 @@ export async function restoreDatabaseFromUploadedBuffer(
   mode: "FULL" | "MENU_ONLY" = "FULL"
 ): Promise<{ success: boolean; message: string; stats?: any }> {
   try {
-    const lowerName = originalFilename.toLowerCase();
+    const cleanFilename = path.basename(originalFilename).replace(/[^a-zA-Z0-9._-]/g, "_");
+    const lowerName = cleanFilename.toLowerCase();
 
-    // 1. Luôn tự động tạo bản sao lưu dự phòng trước khi can thiệp
-    await createDatabaseBackupSnapshot("pre_restore");
-
-    // Lưu một bản sao của file vừa tải lên vào database/backups/
-    if (!fs.existsSync(BACKUPS_DIR)) {
-      fs.mkdirSync(BACKUPS_DIR, { recursive: true });
-    }
-    const uploadedSaveName = `uploaded_${Date.now()}_${path.basename(originalFilename)}`;
-    fs.writeFileSync(path.join(BACKUPS_DIR, uploadedSaveName), buffer);
-
-    // 2. Xử lý file JSON
-    if (lowerName.endsWith(".json")) {
-      const jsonStr = buffer.toString("utf-8");
-      let parsed: any;
-      try {
-        parsed = JSON.parse(jsonStr);
-      } catch {
-        return { success: false, message: "Tệp tải lên không phải là định dạng JSON hợp lệ" };
-      }
-      return importFullDatabaseFromJson(parsed, mode);
-    }
-
-    // 3. Xử lý file SQL
-    if (lowerName.endsWith(".sql")) {
-      const sqlStr = buffer.toString("utf-8");
-      const db = getSqliteDb();
-      db.exec(sqlStr);
-      db.pragma("wal_checkpoint(TRUNCATE)");
-      syncMirrorFile();
-      return { success: true, message: `Đã thực thi thành công tệp lệnh SQL "${originalFilename}" vào CSDL!` };
-    }
-
-    // 4. Xử lý file .db hoặc .sqlite
-    if (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite")) {
-      if (dbInstance) {
-        try {
-          (dbInstance as any).close();
-        } catch {}
-        dbInstance = null;
-      }
-
-      fs.writeFileSync(PRIMARY_DB_FILE, buffer);
-      fs.writeFileSync(MIRROR_DB_FILE, buffer);
-
-      try {
-        fs.unlinkSync(PRIMARY_DB_FILE + "-wal");
-      } catch {}
-      try {
-        fs.unlinkSync(PRIMARY_DB_FILE + "-shm");
-      } catch {}
-
-      const newDb = reloadSqliteDb();
-      newDb.pragma("wal_checkpoint(TRUNCATE)");
-
+    if (!lowerName.endsWith(".json")) {
       return {
-        success: true,
-        message: `Đã khôi phục hoàn chỉnh tệp CSDL SQLite "${originalFilename}"! Tất cả dữ liệu đã được cập nhật.`,
+        success: false,
+        message:
+          "Vì lý do bảo mật, tính năng nhập qua trình duyệt chỉ hỗ trợ tệp sao lưu .json (xuất từ nút Tải Backup JSON). Không cho phép thực thi tệp .sql hoặc ghi đè file .db trực tiếp qua HTTP.",
       };
     }
 
-    return {
-      success: false,
-      message: "Định dạng file không được hỗ trợ. Vui lòng tải lên file .db, .sqlite, .json hoặc .sql.",
-    };
+    // 1. Kiểm tra JSON hợp lệ TRƯỚC khi tạo backup hoặc ghi đĩa
+    let parsed: any;
+    try {
+      parsed = JSON.parse(buffer.toString("utf-8"));
+    } catch {
+      return { success: false, message: "Tệp tải lên không phải là định dạng JSON hợp lệ." };
+    }
+
+    const tablesData = parsed?.tables || parsed;
+    if (!tablesData || typeof tablesData !== "object" || Array.isArray(tablesData)) {
+      return { success: false, message: "Cấu trúc tệp JSON sao lưu không hợp lệ." };
+    }
+
+    // 2. Chụp bản sao lưu dự phòng trước khi can thiệp
+    await createDatabaseBackupSnapshot("pre_restore");
+
+    if (!fs.existsSync(BACKUPS_DIR)) {
+      fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+    }
+    const uploadedSaveName = `uploaded_${Date.now()}_${cleanFilename.slice(0, 60)}`;
+    fs.writeFileSync(path.join(BACKUPS_DIR, uploadedSaveName), buffer);
+    pruneOldBackupSnapshots();
+
+    return importFullDatabaseFromJson(parsed, mode);
   } catch (error: any) {
     console.error("Lỗi khôi phục tệp tải lên:", error);
-    return { success: false, message: "Lỗi trong quá trình khôi phục: " + error.message };
+    return { success: false, message: "Lỗi trong quá trình khôi phục dữ liệu tải lên." };
   }
 }

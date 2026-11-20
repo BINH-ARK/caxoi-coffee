@@ -219,13 +219,15 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
       if (data.success) {
         showToast(`Đã đổi thanh toán: ${nextPaymentStatus === "PAID" ? "ĐÃ THANH TOÁN" : "CHƯA THANH TOÁN"}`);
         fetchOrders(true);
+      } else {
+        showToast(data.message || "Không thể đổi trạng thái thanh toán", "error");
       }
     } catch (e) {
       showToast("Lỗi cập nhật thanh toán", "error");
     }
   };
 
-  // Open Shipper modal
+  // Open Shipper & Delivery Fee modal
   const handleOpenShipperModal = (order: Order) => {
     setSelectedOrder(order);
     setShipperForm({
@@ -238,26 +240,36 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
     setIsShipperModalOpen(true);
   };
 
-  // Save Shipper assignment
-  const handleSaveShipper = async () => {
+  // Save Shipper assignment &/or manual Delivery Fee update
+  const handleSaveShipper = async (dispatchNow: boolean = true) => {
     if (!selectedOrder) return;
     try {
+      const safeDeliveryFee = Math.max(0, Math.round(Number(shipperForm.deliveryFee) || 0));
+      const payload: Record<string, any> = {
+        ...shipperForm,
+        deliveryFee: safeDeliveryFee,
+      };
+      if (dispatchNow) {
+        payload.status = "DELIVERING";
+      }
+
       const res = await fetch(`/api/orders/${selectedOrder.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: "DELIVERING",
-          ...shipperForm,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.success) {
-        showToast("Đã điều phối Shipper & chuyển sang Đang giao hàng!");
+        showToast(
+          dispatchNow
+            ? "Đã điều phối Shipper, cập nhật phí ship & chuyển sang Đang giao hàng!"
+            : `Đã cập nhật phí giao hàng (${formatVND(safeDeliveryFee)}) & thông tin vận chuyển!`
+        );
         setIsShipperModalOpen(false);
         fetchOrders(true);
         setSelectedOrder(data.data);
       } else {
-        showToast(data.message || "Lỗi lưu điều phối shipper", "error");
+        showToast(data.message || "Lỗi lưu điều phối shipper / phí ship", "error");
       }
     } catch (e) {
       showToast("Lỗi kết nối", "error");
@@ -287,7 +299,7 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
   };
 
   // Get next logical status
-  const getNextStatusAction = (currentStatus: string) => {
+  const getNextStatusAction = (currentStatus: string, orderType?: string) => {
     switch (currentStatus) {
       case "PENDING_PAYMENT":
         return { next: "CONFIRMED", label: "Tiếp nhận đơn", icon: CheckCircle2, color: "bg-blue-600 hover:bg-blue-500" };
@@ -296,6 +308,9 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
       case "BREWING":
         return { next: "READY", label: "Đã pha xong", icon: Check, color: "bg-teal-600 hover:bg-teal-500" };
       case "READY":
+        if (orderType === "TAKEAWAY") {
+          return { next: "COMPLETED", label: "Khách đã lấy", icon: CheckCircle2, color: "bg-emerald-600 hover:bg-emerald-500" };
+        }
         return { next: "DELIVERING", label: "Giao shipper", icon: Truck, color: "bg-orange-600 hover:bg-orange-500" };
       case "DELIVERING":
         return { next: "COMPLETED", label: "Đã giao xong", icon: CheckCircle2, color: "bg-emerald-600 hover:bg-emerald-500" };
@@ -398,7 +413,7 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400" />
             <input
               type="text"
-              placeholder="Tìm theo Mã đơn (CX-...), SĐT, Tên khách, Tòa nhà..."
+              placeholder="Tìm theo Mã đơn (CF...), SĐT, Tên khách, Tòa nhà..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-stone-50 border border-stone-200 rounded-xl pl-9 pr-8 py-2 text-sm text-coffee-950 placeholder-stone-400 focus:outline-none focus:border-caramel focus:bg-white shadow-inner transition-colors"
@@ -527,7 +542,7 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
               icon: Clock,
             };
             const StatusIcon = statusConfig.icon;
-            const nextAction = getNextStatusAction(order.status);
+            const nextAction = getNextStatusAction(order.status, order.orderType);
             const totalCups = order.items.reduce((sum, item) => sum + (item.quantity || 1), 0);
             const isGroup = order.orderType === "GROUP_ORDER" || Boolean(order.groupSessionId);
 
@@ -570,7 +585,7 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
                           ? "bg-emerald-50 border-emerald-300 text-emerald-800"
                           : "bg-amber-50 border-amber-300 text-amber-900"
                       }`}
-                      title="Nhấn để đổi trạng thái thanh toán"
+                      title="Nhấn để xác nhận / đổi trạng thái thanh toán"
                     >
                       {order.paymentMethod === "VIETQR_BANKING" ? "VietQR: " : "Tiền mặt: "}
                       {order.paymentStatus === "PAID" ? "Đã thanh toán" : "Chưa thanh toán"}
@@ -618,6 +633,14 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
                           )}
                         </div>
                       </div>
+
+                      {order.shipperName && (
+                        <div className="text-orange-900 bg-orange-50 border border-orange-200 p-2 rounded-lg text-[11px]">
+                          <strong>Shipper:</strong> {order.shipperName}
+                          {order.shipperPhone && ` (${order.shipperPhone})`}
+                          {order.estimatedDeliveryTime && ` • ETA: ${order.estimatedDeliveryTime}`}
+                        </div>
+                      )}
 
                       {order.deliveryNotes && (
                         <div className="text-amber-900 bg-amber-50 border border-amber-200 p-2 rounded-lg text-[11px]">
@@ -701,7 +724,9 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
                           {order.discountAmount > 0 && (
                             <span className="text-pink-600 font-semibold">Giảm: -{formatVND(order.discountAmount)}</span>
                           )}
-                          <span>Ship: {formatVND(order.deliveryFee)}</span>
+                          <span className="font-semibold text-coffee-900">
+                            Ship: {formatVND(order.deliveryFee)}
+                          </span>
                         </div>
                         <div className="font-black text-caramel text-base">
                           Tổng cộng: {formatVND(order.totalAmount)}
@@ -711,8 +736,8 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
 
                     {/* ACTION BUTTONS TOOLBAR */}
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                      {/* Left: View details & cancel */}
-                      <div className="flex items-center gap-2">
+                      {/* Left: View details, Shipper/Fee coordination & cancel */}
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => {
                             setSelectedOrder(order);
@@ -723,6 +748,19 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
                           <Eye className="w-3.5 h-3.5 text-stone-500" />
                           <span>Chi tiết</span>
                         </button>
+
+                        {order.orderType !== "TAKEAWAY" &&
+                          order.status !== "CANCELLED" &&
+                          order.status !== "COMPLETED" && (
+                            <button
+                              onClick={() => handleOpenShipperModal(order)}
+                              className="flex items-center gap-1.5 text-xs font-bold text-orange-800 hover:text-orange-950 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-3 py-1.5 rounded-xl transition-all"
+                              title="Cập nhật phí ship thực tế hoặc gán thông tin tài xế giao hàng"
+                            >
+                              <Truck className="w-3.5 h-3.5 text-orange-600" />
+                              <span>Shipper &amp; Phí ship</span>
+                            </button>
+                          )}
 
                         {order.status !== "CANCELLED" && order.status !== "COMPLETED" && (
                           <button
@@ -742,7 +780,11 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
                       {nextAction && order.status !== "CANCELLED" && (
                         <button
                           onClick={() => {
-                            handleUpdateStatus(order.id, nextAction.next);
+                            if (nextAction.next === "DELIVERING") {
+                              handleOpenShipperModal(order);
+                            } else {
+                              handleUpdateStatus(order.id, nextAction.next);
+                            }
                           }}
                           className={`flex items-center gap-2 text-xs font-black text-white px-4 py-2 rounded-xl shadow-sm transition-all active:scale-95 ${nextAction.color}`}
                         >
@@ -759,14 +801,20 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
         </div>
       )}
 
-      {/* MODAL 1: SHIPPER DISPATCH & COORDINATION (LIGHT THEME) */}
+      {/* MODAL 1: SHIPPER DISPATCH & DELIVERY FEE COORDINATION (LIGHT THEME) */}
       {isShipperModalOpen && selectedOrder && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-stone-200">
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setIsShipperModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-stone-200"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="bg-gradient-to-r from-coffee-950 via-coffee-900 to-coffee-800 text-white p-5 flex items-center justify-between">
               <div className="flex items-center gap-2 font-bold">
                 <Truck className="w-5 h-5 text-orange-400" />
-                <span>Điều phối Shipper đơn #{selectedOrder.orderCode}</span>
+                <span>Điều phối Shipper &amp; Phí ship đơn #{selectedOrder.orderCode}</span>
               </div>
               <button
                 onClick={() => setIsShipperModalOpen(false)}
@@ -783,6 +831,58 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
                 </div>
                 <div>
                   <strong>Địa chỉ giao:</strong> {getFullDestinationAddress(selectedOrder)}
+                </div>
+                <div>
+                  <strong>Tiền hàng - Giảm giá:</strong>{" "}
+                  {formatVND(Math.max(0, selectedOrder.subtotalAmount - selectedOrder.discountAmount))}
+                </div>
+              </div>
+
+              {/* Delivery Fee (Manual adjustment for MANUAL_ZERO or real shipper fee) */}
+              <div className="space-y-1.5 bg-amber-50/70 p-3.5 rounded-xl border border-amber-200">
+                <label className="font-bold text-coffee-900 flex items-center justify-between">
+                  <span>Phí giao hàng thực tế (VNĐ):</span>
+                  <span className="text-caramel font-black">
+                    Tổng mới:{" "}
+                    {formatVND(
+                      Math.max(
+                        0,
+                        selectedOrder.subtotalAmount -
+                          selectedOrder.discountAmount +
+                          Math.max(0, Number(shipperForm.deliveryFee) || 0)
+                      )
+                    )}
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1000"
+                  value={shipperForm.deliveryFee}
+                  onChange={(e) =>
+                    setShipperForm({
+                      ...shipperForm,
+                      deliveryFee: Math.max(0, Number(e.target.value) || 0),
+                    })
+                  }
+                  placeholder="Ví dụ: 15000 hoặc 0"
+                  className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-coffee-950 font-bold focus:outline-none focus:border-caramel"
+                />
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {[0, 10000, 15000, 20000, 25000, 30000].map((fee) => (
+                    <button
+                      key={fee}
+                      type="button"
+                      onClick={() => setShipperForm({ ...shipperForm, deliveryFee: fee })}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                        shipperForm.deliveryFee === fee
+                          ? "bg-caramel text-white border-caramel"
+                          : "bg-white text-coffee-700 border-amber-200 hover:bg-amber-100"
+                      }`}
+                    >
+                      {fee === 0 ? "Freeship (0đ)" : formatVND(fee)}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -816,52 +916,38 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
                 </div>
               </div>
 
-              {/* Shipper Phone */}
-              <div className="space-y-1.5">
-                <label className="font-bold text-coffee-900">Số điện thoại Shipper:</label>
-                <input
-                  type="text"
-                  value={shipperForm.shipperPhone}
-                  onChange={(e) => setShipperForm({ ...shipperForm, shipperPhone: e.target.value })}
-                  placeholder="Ví dụ: 0905 249 733"
-                  className="w-full bg-stone-50 border border-stone-300 rounded-xl px-3 py-2 text-coffee-950 focus:outline-none focus:border-caramel focus:bg-white"
-                />
-              </div>
-
-              {/* ETA */}
-              <div className="space-y-1.5">
-                <label className="font-bold text-coffee-900">Thời gian giao dự kiến:</label>
-                <input
-                  type="text"
-                  value={shipperForm.estimatedDeliveryTime}
-                  onChange={(e) => setShipperForm({ ...shipperForm, estimatedDeliveryTime: e.target.value })}
-                  placeholder="Ví dụ: 15 - 20 phút hoặc 11:30"
-                  className="w-full bg-stone-50 border border-stone-300 rounded-xl px-3 py-2 text-coffee-950 focus:outline-none focus:border-caramel focus:bg-white"
-                />
-              </div>
-
-              {/* Delivery Fee */}
-              <div className="space-y-1.5">
-                <label className="font-bold text-coffee-900">Phí giao hàng (VNĐ):</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="1000"
-                  value={shipperForm.deliveryFee}
-                  onChange={(e) => setShipperForm({ ...shipperForm, deliveryFee: Number(e.target.value) || 0 })}
-                  placeholder="Ví dụ: 15000 hoặc 0"
-                  className="w-full bg-stone-50 border border-stone-300 rounded-xl px-3 py-2 text-coffee-950 font-bold focus:outline-none focus:border-caramel focus:bg-white"
-                />
+              {/* Shipper Phone & ETA */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="font-bold text-coffee-900">SĐT Shipper:</label>
+                  <input
+                    type="text"
+                    value={shipperForm.shipperPhone}
+                    onChange={(e) => setShipperForm({ ...shipperForm, shipperPhone: e.target.value })}
+                    placeholder="Ví dụ: 0905 249 733"
+                    className="w-full bg-stone-50 border border-stone-300 rounded-xl px-3 py-2 text-coffee-950 focus:outline-none focus:border-caramel focus:bg-white"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="font-bold text-coffee-900">Thời gian dự kiến:</label>
+                  <input
+                    type="text"
+                    value={shipperForm.estimatedDeliveryTime}
+                    onChange={(e) => setShipperForm({ ...shipperForm, estimatedDeliveryTime: e.target.value })}
+                    placeholder="Ví dụ: 15 - 20 phút"
+                    className="w-full bg-stone-50 border border-stone-300 rounded-xl px-3 py-2 text-coffee-950 focus:outline-none focus:border-caramel focus:bg-white"
+                  />
+                </div>
               </div>
 
               {/* Notes */}
               <div className="space-y-1.5">
-                <label className="font-bold text-coffee-900">Ghi chú vận chuyển (Shipper & Khách):</label>
+                <label className="font-bold text-coffee-900">Ghi chú vận chuyển (Shipper &amp; Khách):</label>
                 <textarea
                   rows={2}
                   value={shipperForm.trackingNotes}
                   onChange={(e) => setShipperForm({ ...shipperForm, trackingNotes: e.target.value })}
-                  placeholder="Ví dụ: Đã trả tiền trước, gửi quầy lễ tân tầng 1..."
+                  placeholder="Ví dụ: Đã báo phí ship 20k cho khách, gửi quầy lễ tân tầng 1..."
                   className="w-full bg-stone-50 border border-stone-300 rounded-xl p-2.5 text-coffee-950 focus:outline-none focus:border-caramel focus:bg-white"
                 />
               </div>
@@ -881,21 +967,29 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
               </div>
             </div>
 
-            <div className="p-4 bg-stone-50 border-t border-stone-200 flex items-center justify-end gap-3">
+            <div className="p-4 bg-stone-50 border-t border-stone-200 flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIsShipperModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-stone-600 hover:text-stone-900"
+                className="px-3.5 py-2 rounded-xl text-xs font-bold text-stone-600 hover:text-stone-900"
               >
                 Hủy
               </button>
               <button
                 type="button"
-                onClick={handleSaveShipper}
-                className="px-5 py-2 rounded-xl text-xs font-bold bg-orange-600 hover:bg-orange-500 text-white shadow flex items-center gap-1.5"
+                onClick={() => handleSaveShipper(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-coffee-800 hover:bg-coffee-900 text-white shadow flex items-center gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Lưu Phí ship &amp; Thông tin</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveShipper(true)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-600 hover:bg-orange-500 text-white shadow flex items-center gap-1.5"
               >
                 <Send className="w-3.5 h-3.5" />
-                <span>Xác nhận & Bàn giao Shipper</span>
+                <span>Lưu &amp; Giao Shipper</span>
               </button>
             </div>
           </div>
@@ -904,8 +998,14 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
 
       {/* MODAL 2: CANCEL ORDER REASON (LIGHT THEME) */}
       {isCancelModalOpen && orderToCancel && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl border border-stone-200">
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setIsCancelModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl border border-stone-200"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="p-5 border-b border-stone-200 flex items-center justify-between bg-rose-50">
               <div className="flex items-center gap-2 text-rose-800 font-bold">
                 <AlertTriangle className="w-5 h-5 text-rose-600" />
@@ -959,12 +1059,18 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
 
       {/* MODAL 3: STICKER CUP PREVIEW (LIGHT THEME) */}
       {isStickerModalOpen && stickerOrder && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl w-full max-w-3xl overflow-hidden shadow-2xl border border-stone-200 flex flex-col max-h-[90vh]">
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setIsStickerModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-3xl overflow-hidden shadow-2xl border border-stone-200 flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="bg-gradient-to-r from-coffee-950 to-coffee-900 text-white p-5 flex items-center justify-between">
               <div className="flex items-center gap-2 font-bold">
                 <Printer className="w-5 h-5 text-amber-300" />
-                <span>Xem & In tem nhãn dán ly (#{stickerOrder.orderCode})</span>
+                <span>Xem &amp; In tem nhãn dán ly (#{stickerOrder.orderCode})</span>
               </div>
               <button
                 onClick={() => setIsStickerModalOpen(false)}
@@ -976,19 +1082,33 @@ export default function OrderHistoryManager({ currentUser }: OrderHistoryManager
 
             <div className="p-6 overflow-y-auto space-y-4 bg-stone-50 flex-1">
               <p className="text-xs text-stone-600">
-                Tem in sẵn sàng dán lên ly để Barista pha chế và Shipper phân loại theo tên từng người nhận:
+                Tem in tách riêng từng ly sẵn sàng dán lên cốc để Barista pha chế và Shipper phân loại chính xác:
               </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {stickerOrder.items.map((item) => (
-                  <div key={item.id} className="flex justify-center">
-                    <CupStickerPreview
-                      orderCode={stickerOrder.orderCode}
-                      item={item}
-                      createdAt={stickerOrder.createdAt}
-                      onPrint={() => window.print()}
-                    />
-                  </div>
-                ))}
+              <div className="printable-area grid grid-cols-1 md:grid-cols-2 gap-4">
+                {stickerOrder.items.flatMap((item, idx) =>
+                  Array.from({ length: Math.max(1, item.quantity) }).map((_, cupIdx) => (
+                    <div
+                      key={`${item.id || idx}-${cupIdx}`}
+                      className="flex justify-center break-inside-avoid"
+                    >
+                      <CupStickerPreview
+                        orderCode={stickerOrder.orderCode}
+                        item={{
+                          ...item,
+                          quantity: 1,
+                          recipientLabel:
+                            item.quantity > 1 && item.recipientLabel
+                              ? `${item.recipientLabel} (${cupIdx + 1}/${item.quantity})`
+                              : item.quantity > 1
+                              ? `Ly ${cupIdx + 1}/${item.quantity}`
+                              : item.recipientLabel,
+                        }}
+                        createdAt={stickerOrder.createdAt}
+                        onPrint={() => window.print()}
+                      />
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 

@@ -3,7 +3,7 @@
 import React from "react";
 import { usePathname } from "next/navigation";
 import { ExternalLink, Sparkles } from "lucide-react";
-import { XANH_SM_ONELINK } from "@/lib/utils";
+import { XANH_SM_ONELINK, sanitizeExternalUrl } from "@/lib/utils";
 import { useBusinessSettings } from "@/lib/useBusinessSettings";
 
 export { XANH_SM_ONELINK };
@@ -20,7 +20,7 @@ export default function XanhSmFloatingButton() {
   return (
     <aside aria-label="Kênh đặt món Xanh SM Ngon" className="fixed bottom-20 sm:bottom-6 left-4 z-40 group">
       <a
-        href={settings.xanhSmUrl || XANH_SM_ONELINK}
+        href={sanitizeExternalUrl(settings.xanhSmUrl, XANH_SM_ONELINK)}
         target="_blank"
         rel="noopener noreferrer"
         className="flex items-center gap-2 bg-[#008F5D] hover:bg-[#00764D] text-white px-3.5 py-2.5 rounded-2xl shadow-xl border-2 border-emerald-300/40 transition-all duration-300 hover:scale-105 active:scale-95 text-xs font-bold backdrop-blur-sm"

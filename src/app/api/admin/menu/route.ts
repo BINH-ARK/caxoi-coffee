@@ -3,23 +3,42 @@ import { Product } from "@/types";
 import {
   getProductsFromSqlite,
   createProductInSqlite,
-  executeSqlSeedFile,
+  resetMenuTablesOnlyInSqlite,
 } from "@/lib/sqlite";
+import { requireStaffAuth } from "@/lib/serverAuth";
+import { sanitizeImageUrl } from "@/lib/utils";
+
+export const dynamic = "force-dynamic";
+
+const DEFAULT_COFFEE_IMG =
+  "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=600&auto=format&fit=crop&q=80";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
 
-    // Reset action to restore pure Cà Xòi menu from SQL
+    // Reset action to restore pure Cà Xòi menu ONLY (preserves orders, users, promotions, settings)
     if (body.action === "RESET_CA_XOI_MENU") {
-      executeSqlSeedFile();
+      const adminAuth = await requireStaffAuth(request, { roles: ["SUPER_ADMIN"] });
+      if (!adminAuth.ok) return adminAuth.response;
+
+      const ok = resetMenuTablesOnlyInSqlite();
+      if (!ok) {
+        return NextResponse.json(
+          { success: false, message: "Không thể khôi phục thực đơn chuẩn từ tệp SQL." },
+          { status: 500 }
+        );
+      }
       const products = getProductsFromSqlite();
       return NextResponse.json({
         success: true,
-        message: "Đã khôi phục toàn bộ Thực đơn 5 món & 3 quy cách chuẩn Quán Cà Xòi từ SQLite!",
+        message: "Đã khôi phục Thực đơn chuẩn Quán Cà Xòi (giữ nguyên toàn bộ đơn hàng, doanh thu và tài khoản)!",
         data: products,
       });
     }
+
+    const auth = await requireStaffAuth(request, { permission: "menu.edit_pricing" });
+    if (!auth.ok) return auth.response;
 
     const {
       name,
@@ -27,7 +46,7 @@ export async function POST(request: Request) {
       description = "",
       basePrice,
       salePrice = null,
-      imageUrl = "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=600&auto=format&fit=crop&q=80",
+      imageUrl = DEFAULT_COFFEE_IMG,
       prepTimeMinutes = 5,
       tags = ["NEW"],
       variants = [
@@ -39,15 +58,28 @@ export async function POST(request: Request) {
       isFeatured = false,
     } = body;
 
-    if (!name || !basePrice) {
+    const cleanName = typeof name === "string" ? name.trim() : "";
+    const parsedBasePrice = Number(basePrice);
+    if (!cleanName || !Number.isFinite(parsedBasePrice) || parsedBasePrice < 0) {
       return NextResponse.json(
-        { success: false, message: "Vui lòng nhập tên món và giá bán cơ bản." },
+        { success: false, message: "Vui lòng nhập tên món và giá bán cơ bản hợp lệ." },
+        { status: 400 }
+      );
+    }
+
+    const parsedSalePrice =
+      salePrice !== null && salePrice !== undefined && salePrice !== ""
+        ? Number(salePrice)
+        : null;
+    if (parsedSalePrice !== null && (!Number.isFinite(parsedSalePrice) || parsedSalePrice < 0)) {
+      return NextResponse.json(
+        { success: false, message: "Giá khuyến mãi không hợp lệ." },
         { status: 400 }
       );
     }
 
     const id = `p-${Date.now()}`;
-    const slug = name
+    const slug = cleanName
       .toLowerCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
@@ -56,21 +88,20 @@ export async function POST(request: Request) {
 
     const newProduct: Product = {
       id,
-      categoryId: Number(categoryId),
-      name: name.trim(),
+      categoryId: Number(categoryId) || 1,
+      name: cleanName,
       slug,
-      description: description.trim(),
-      imageUrl,
-      basePrice: Number(basePrice),
-      salePrice: salePrice ? Number(salePrice) : null,
-      isAvailable,
-      isFeatured,
-      prepTimeMinutes: Number(prepTimeMinutes),
-      tags,
-      variants,
+      description: typeof description === "string" ? description.trim() : "",
+      imageUrl: sanitizeImageUrl(typeof imageUrl === "string" ? imageUrl : "", DEFAULT_COFFEE_IMG),
+      basePrice: Math.round(parsedBasePrice),
+      salePrice: parsedSalePrice !== null ? Math.round(parsedSalePrice) : null,
+      isAvailable: Boolean(isAvailable),
+      isFeatured: Boolean(isFeatured),
+      prepTimeMinutes: Math.max(1, Math.min(60, Number(prepTimeMinutes) || 5)),
+      tags: Array.isArray(tags) ? tags : ["NEW"],
+      variants: Array.isArray(variants) ? variants : [],
     };
 
-    // Lưu trực tiếp vào SQLite (caxoi_cafe.db)
     const success = createProductInSqlite(newProduct);
     if (!success) {
       return NextResponse.json(

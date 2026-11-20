@@ -1,14 +1,22 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { requireStaffAuth } from "@/lib/serverAuth";
 
 export const dynamic = "force-dynamic";
 
 const ENV_PATH = path.join(process.cwd(), ".env");
+const EMAIL_REGEX = /^[^\s@<>()[\]\\,;:"\r\n]+@[^\s@<>()[\]\\,;:"\r\n]+\.[^\s@<>()[\]\\,;:"\r\n]+$/;
+
+function hasControlChars(val: string): boolean {
+  return /[\r\n\0]/.test(val);
+}
 
 function updateEnvVariable(content: string, key: string, value: string): string {
+  const safeVal = value.replace(/[\r\n\0]/g, "");
   const regex = new RegExp(`^${key}=.*$`, "m");
-  const formattedValue = value.includes(" ") && !value.startsWith('"') ? `"${value}"` : value;
+  const escaped = safeVal.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const formattedValue = /[\s#"'$]/.test(safeVal) ? `"${escaped}"` : safeVal;
 
   if (regex.test(content)) {
     return content.replace(regex, `${key}=${formattedValue}`);
@@ -16,11 +24,14 @@ function updateEnvVariable(content: string, key: string, value: string): string 
   return content.trimEnd() + `\n${key}=${formattedValue}\n`;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const auth = await requireStaffAuth(request, { roles: ["SUPER_ADMIN"] });
+  if (!auth.ok) return auth.response;
+
   try {
     const smtpUser = process.env.SMTP_USER || "";
     const smtpPass = process.env.SMTP_PASS || "";
-    const smtpFrom = process.env.SMTP_FROM || `Cà Xòi Coffee & Tea ☕ <${smtpUser}>`;
+    const smtpFrom = process.env.SMTP_FROM || (smtpUser ? `Cà Xòi Coffee & Tea ☕ <${smtpUser}>` : "");
     const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
     const smtpPort = process.env.SMTP_PORT || "465";
 
@@ -28,7 +39,7 @@ export async function GET() {
       success: true,
       data: {
         smtpUser,
-        smtpPass,
+        hasPassword: Boolean(smtpPass),
         smtpFrom,
         smtpHost,
         smtpPort,
@@ -44,29 +55,43 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await requireStaffAuth(request, { roles: ["SUPER_ADMIN"] });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json();
-    const { smtpUser, smtpPass, smtpFrom } = body;
+    const rawUser = typeof body.smtpUser === "string" ? body.smtpUser : "";
+    const rawPass = typeof body.smtpPass === "string" ? body.smtpPass : "";
+    const rawFrom = typeof body.smtpFrom === "string" ? body.smtpFrom : "";
 
-    if (!smtpUser || !smtpUser.trim()) {
+    if (hasControlChars(rawUser) || hasControlChars(rawPass) || hasControlChars(rawFrom)) {
       return NextResponse.json(
-        { success: false, message: "Vui lòng nhập địa chỉ Gmail gửi thư (SMTP_USER)." },
+        { success: false, message: "Dữ liệu cấu hình email chứa ký tự điều khiển không hợp lệ." },
         { status: 400 }
       );
     }
 
-    const cleanUser = smtpUser.trim().toLowerCase();
-    // Bỏ khoảng cách trong App Password nếu người dùng sao chép dạng "xxxx xxxx xxxx xxxx"
-    const cleanPass = smtpPass ? smtpPass.replace(/\s+/g, "").trim() : (process.env.SMTP_PASS || "");
+    const cleanUser = rawUser.trim().toLowerCase();
+    if (!cleanUser || !EMAIL_REGEX.test(cleanUser) || cleanUser.length > 120) {
+      return NextResponse.json(
+        { success: false, message: "Địa chỉ Gmail gửi thư (SMTP_USER) không hợp lệ." },
+        { status: 400 }
+      );
+    }
 
-    if (!cleanPass) {
+    // Bỏ khoảng cách trong App Password nếu người dùng sao chép dạng "xxxx xxxx xxxx xxxx"
+    const cleanPass = rawPass.trim()
+      ? rawPass.replace(/\s+/g, "").trim()
+      : process.env.SMTP_PASS || "";
+
+    if (!cleanPass || cleanPass.length > 128) {
       return NextResponse.json(
         { success: false, message: "Vui lòng nhập Mật khẩu ứng dụng 16 ký tự của Google (SMTP_PASS)." },
         { status: 400 }
       );
     }
 
-    const fromName = smtpFrom?.trim() || `Cà Xòi Coffee & Tea ☕ <${cleanUser}>`;
+    const fromName = (rawFrom.trim() || `Cà Xòi Coffee & Tea ☕ <${cleanUser}>`).slice(0, 180);
 
     // 1. Cập nhật vào runtime process.env ngay lập tức
     process.env.SMTP_HOST = "smtp.gmail.com";
@@ -76,7 +101,7 @@ export async function POST(request: Request) {
     process.env.SMTP_PASS = cleanPass;
     process.env.SMTP_FROM = fromName;
 
-    // 2. Ghi đè vào tệp tin .env
+    // 2. Ghi đè an toàn vào tệp tin .env
     try {
       let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, "utf-8") : "";
 
@@ -95,10 +120,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message: `Đã lưu thành công tài khoản Gmail "${cleanUser}" vào file .env!`,
+      message: `Đã lưu thành công tài khoản Gmail "${cleanUser}"!`,
       data: {
         smtpUser: cleanUser,
-        smtpPass: cleanPass,
+        hasPassword: true,
         smtpFrom: fromName,
         isConfigured: true,
       },

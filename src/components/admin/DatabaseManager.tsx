@@ -112,8 +112,8 @@ export default function DatabaseManager() {
 
   const notifyChange = () => {
     try {
-      localStorage.setItem("caxoi_menu_updated", Date.now().toString());
-      window.dispatchEvent(new Event("caxoi_menu_updated"));
+      localStorage.setItem("caxoi_menu_updated_at", Date.now().toString());
+      window.dispatchEvent(new Event("caxoi_menu_updated_at"));
     } catch {}
   };
 
@@ -216,13 +216,12 @@ export default function DatabaseManager() {
     }
   };
 
-  // 4. File selection & preview
+  // 4. File selection & preview (JSON-only for safe schema-validated online restore)
   const processSelectedFile = (file: File) => {
     const ext = file.name.split(".").pop()?.toLowerCase() || "";
-    const validExts = ["db", "sqlite", "json", "sql"];
-    if (!validExts.includes(ext)) {
+    if (ext !== "json") {
       setMessage({
-        text: `Tệp "${file.name}" không hợp lệ. Vui lòng chọn tệp .db, .sqlite, .json hoặc .sql`,
+        text: `Vì lý do bảo mật, hệ thống chỉ hỗ trợ nhập trực tuyến từ tệp sao lưu .json được xuất bởi Cà Xòi.`,
         type: "error",
       });
       return;
@@ -231,38 +230,29 @@ export default function DatabaseManager() {
     setSelectedFile(file);
     const sizeKb = Math.round(file.size / 1024);
     const sizeFormatted = sizeKb > 1024 ? `${(sizeKb / 1024).toFixed(1)} MB` : `${sizeKb} KB`;
+    const formatName = "JSON Backup";
 
-    let formatName = ext.toUpperCase();
-    if (ext === "db" || ext === "sqlite") formatName = "SQLite Database";
-    if (ext === "json") formatName = "JSON Data";
-    if (ext === "sql") formatName = "SQL Script";
-
-    // Phân tích sơ bộ nếu là JSON
-    if (ext === "json") {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const parsed = JSON.parse(e.target?.result as string);
-          const tables = parsed.tables || parsed;
-          setFilePreview({
-            name: file.name,
-            sizeFormatted,
-            format: formatName,
-            summary: {
-              products: tables.products?.length ?? "Chưa rõ",
-              categories: tables.categories?.length ?? "Chưa rõ",
-              orders: tables.orders?.length ?? "Chưa rõ",
-              options: tables.product_options?.length ?? "Chưa rõ",
-            },
-          });
-        } catch {
-          setFilePreview({ name: file.name, sizeFormatted, format: formatName });
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      setFilePreview({ name: file.name, sizeFormatted, format: formatName });
-    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target?.result as string);
+        const tables = parsed.tables || parsed;
+        setFilePreview({
+          name: file.name,
+          sizeFormatted,
+          format: formatName,
+          summary: {
+            products: tables.products?.length ?? "Chưa rõ",
+            categories: tables.categories?.length ?? "Chưa rõ",
+            orders: tables.orders?.length ?? "Chưa rõ",
+            options: tables.product_options?.length ?? "Chưa rõ",
+          },
+        });
+      } catch {
+        setFilePreview({ name: file.name, sizeFormatted, format: formatName });
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -339,7 +329,7 @@ export default function DatabaseManager() {
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-stone-300 mt-1 max-w-2xl leading-relaxed">
-                Quản lý toàn diện dữ liệu quán Cà Xòi: Tải về các bản sao lưu định dạng <strong>JSON, SQLite (.db)</strong> hoặc <strong>SQL</strong>, nhập dữ liệu từ máy tính và khôi phục an toàn không lo mất dữ liệu.
+                Quản lý toàn diện dữ liệu quán Cà Xòi: Tải về các bản sao lưu định dạng <strong>JSON, SQLite (.db)</strong> hoặc <strong>SQL Live Dump</strong>, và khôi phục an toàn từ tệp JSON đã xác thực cấu trúc.
               </p>
             </div>
           </div>
@@ -394,15 +384,15 @@ export default function DatabaseManager() {
         <div className="mt-5 pt-4 border-t border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 text-stone-300 overflow-hidden">
             <FolderOpen className="w-4 h-4 text-amber-400 shrink-0" />
-            <span className="font-semibold shrink-0">Đường dẫn tệp SQLite trên máy:</span>
+            <span className="font-semibold shrink-0">Tệp SQLite trong dự án:</span>
             <code className="bg-black/40 px-2 py-1 rounded-lg text-amber-300 font-mono text-[11px] truncate select-all border border-white/10">
-              {sqlite?.absolutePath || "database/caxoi_cafe.db"}
+              {sqlite?.relativePath || "database/caxoi_cafe.db"}
             </code>
           </div>
 
           <button
             type="button"
-            onClick={() => handleCopyPath(sqlite?.absolutePath || "database/caxoi_cafe.db")}
+            onClick={() => handleCopyPath(sqlite?.relativePath || "database/caxoi_cafe.db")}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/15 shrink-0 self-start sm:self-auto"
           >
             {copied ? (
@@ -453,7 +443,7 @@ export default function DatabaseManager() {
                       <span className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.2 rounded font-semibold">Khuyên dùng</span>
                     </h4>
                     <p className="text-[11px] text-coffee-500">
-                      Đầy đủ 16 bảng (Món, size, topping, độ ngọt, đá, đơn hàng, phân quyền). Đọc & sửa được.
+                      Đầy đủ 16 bảng (Món, size, topping, độ ngọt, đá, đơn hàng, phân quyền). Nhập khôi phục trực tuyến được.
                     </p>
                   </div>
                 </div>
@@ -478,7 +468,7 @@ export default function DatabaseManager() {
                       <span>Tệp CSDL SQLite Nguyên Bản (.db)</span>
                     </h4>
                     <p className="text-[11px] text-coffee-500">
-                      Tệp nhị phân hoàn chỉnh, mở trực tiếp bằng DB Browser for SQLite hoặc di chuyển server.
+                      Đã tự động Checkpoint WAL, mở trực tiếp bằng DB Browser for SQLite hoặc lưu trữ dài hạn.
                     </p>
                   </div>
                 </div>
@@ -492,7 +482,7 @@ export default function DatabaseManager() {
                 </a>
               </div>
 
-              {/* Option C: SQL Script */}
+              {/* Option C: Live SQL Dump */}
               <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-200/70 hover:border-amber-300 transition-all flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center shrink-0">
@@ -500,10 +490,10 @@ export default function DatabaseManager() {
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-coffee-900 flex items-center gap-1.5">
-                      <span>Tệp Mã Nguồn SQL (.sql)</span>
+                      <span>Tệp Sao Lưu SQL Thực Tế (.sql)</span>
                     </h4>
                     <p className="text-[11px] text-coffee-500">
-                      Tệp lệnh CREATE TABLE và INSERT dữ liệu chuẩn cho SQLite.
+                      Xuất câu lệnh INSERT từ dữ liệu đang chạy thực tế trong SQLite.
                     </p>
                   </div>
                 </div>
@@ -538,7 +528,7 @@ export default function DatabaseManager() {
 
               {backups.length === 0 ? (
                 <div className="p-6 text-center bg-stone-50 rounded-2xl border border-dashed border-stone-200 text-xs text-coffee-500">
-                  Chưa có bản sao lưu nào được lưu trên máy chủ. Hãy bấm <strong>"⚡ Tạo Bản Sao Lưu Ngay"</strong> ở góc trên để tạo bản lưu trữ đầu tiên!
+                  Chưa có bản sao lưu nào được lưu trên máy chủ. Hãy bấm <strong>&ldquo;⚡ Tạo Bản Sao Lưu Ngay&rdquo;</strong> ở góc trên để tạo bản lưu trữ đầu tiên!
                 </div>
               ) : (
                 <div className="max-h-56 overflow-y-auto space-y-2 pr-1 no-scrollbar">
@@ -594,7 +584,13 @@ export default function DatabaseManager() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteSnapshot(b.filename)}
+                          onClick={() => {
+                            setConfirmModal({
+                              isOpen: true,
+                              type: "DELETE_SNAPSHOT",
+                              targetFilename: b.filename,
+                            });
+                          }}
                           disabled={actionLoading !== null}
                           className="p-1 text-stone-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                           title="Xóa bản sao lưu này"
@@ -622,7 +618,7 @@ export default function DatabaseManager() {
                 </div>
                 <div>
                   <h3 className="font-black text-base text-coffee-900">📥 Nhập Dữ Liệu (Import / Restore)</h3>
-                  <p className="text-xs text-coffee-500">Tải tệp sao lưu từ máy tính để cập nhật hoặc khôi phục CSDL</p>
+                  <p className="text-xs text-coffee-500">Tải tệp sao lưu JSON từ máy tính để cập nhật hoặc khôi phục CSDL</p>
                 </div>
               </div>
             </div>
@@ -647,7 +643,7 @@ export default function DatabaseManager() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".db,.sqlite,.json,.sql"
+                accept=".json"
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files && e.target.files[0]) {
@@ -661,10 +657,10 @@ export default function DatabaseManager() {
               </div>
 
               <h4 className="text-xs font-bold text-coffee-900">
-                {selectedFile ? selectedFile.name : "Kéo thả tệp tin vào đây hoặc bấm để chọn"}
+                {selectedFile ? selectedFile.name : "Kéo thả tệp .json vào đây hoặc bấm để chọn"}
               </h4>
               <p className="text-[11px] text-coffee-500 mt-1">
-                Hỗ trợ các định dạng: <strong className="text-coffee-700">.json, .db, .sqlite, .sql</strong> (Tối đa 50MB)
+                Hỗ trợ định dạng bảo mật: <strong className="text-coffee-700">.json</strong> (Tối đa 20MB, tự động kiểm tra cấu trúc bảng)
               </p>
             </div>
 
@@ -847,7 +843,7 @@ export default function DatabaseManager() {
 
           <div className="mt-4 pt-3 border-t border-stone-100">
             <span className="text-[11px] text-coffee-600 block leading-tight">
-              Tự động phát hiện khi bạn chỉnh sửa và lưu tệp <code className="bg-stone-100 px-1 py-0.5 rounded font-bold text-caramel">database/sqlite_caxoi_cafe.sql</code>!
+              Cơ chế bảo vệ dữ liệu: CSDL vận hành thực tế tại <code className="bg-stone-100 px-1 py-0.5 rounded font-bold text-caramel">database/caxoi_cafe.db</code> không tự động bị ghi đè khi tệp SQL mẫu thay đổi.
             </span>
           </div>
         </div>
@@ -855,24 +851,47 @@ export default function DatabaseManager() {
         {/* Database Tables Summary */}
         <div className="bg-white rounded-3xl p-5 border border-stone-200/80 shadow-sm md:col-span-2 flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <div className="flex items-center gap-2">
                 <Table className="w-4 h-4 text-caramel" />
                 <h3 className="font-black text-sm text-coffee-900">Dữ Liệu Trong Các Bảng SQLite</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm("Nạp lại cấu trúc gốc sẽ khôi phục 5 món Cà Xòi và các kích cỡ chuẩn. Bạn có chắc muốn thực hiện?")) {
-                    handlePostAction("RESEED_SQLITE");
-                  }
-                }}
-                disabled={actionLoading !== null || isImporting}
-                className="text-[11px] font-bold text-caramel hover:text-amber-800 flex items-center gap-1 bg-amber-50 hover:bg-amber-100 px-3 py-1 rounded-xl transition-colors disabled:opacity-50"
-              >
-                <RefreshCw className={`w-3 h-3 ${actionLoading === "RESEED_SQLITE" ? "animate-spin" : ""}`} />
-                <span>Khôi phục CSDL gốc</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "Khôi phục Thực đơn gốc sẽ nạp lại 5 món Cà Xòi chuẩn và giữ nguyên toàn bộ Đơn hàng, Tài khoản, Mã giảm giá và Cài đặt quán. Tiếp tục?"
+                      )
+                    ) {
+                      handlePostAction("RESET_MENU_ONLY");
+                    }
+                  }}
+                  disabled={actionLoading !== null || isImporting}
+                  className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1 rounded-xl transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${actionLoading === "RESET_MENU_ONLY" ? "animate-spin" : ""}`} />
+                  <span>Chỉ khôi phục Thực đơn (An toàn)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "⚠️ CẢNH BÁO NGUY HIỂM: Khôi phục toàn bộ CSDL gốc sẽ XÓA toàn bộ đơn hàng thực tế, tài khoản nhân viên tự tạo và cài đặt hiện tại (hệ thống sẽ tạo bản sao lưu tự động trước khi reset). Bạn có chắc chắn muốn tiếp tục?"
+                      )
+                    ) {
+                      handlePostAction("RESEED_SQLITE");
+                    }
+                  }}
+                  disabled={actionLoading !== null || isImporting}
+                  className="text-[11px] font-bold text-red-700 hover:text-red-900 flex items-center gap-1 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1 rounded-xl transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${actionLoading === "RESEED_SQLITE" ? "animate-spin" : ""}`} />
+                  <span>Reset toàn bộ CSDL gốc</span>
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

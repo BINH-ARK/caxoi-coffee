@@ -6,13 +6,17 @@ import {
   togglePromotionInSqlite,
   deletePromotionInSqlite,
 } from "@/lib/sqlite";
+import { requireStaffAuth } from "@/lib/serverAuth";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GET: Lấy danh sách tất cả các mã khuyến mãi
  */
-export async function GET() {
+export async function GET(request: Request) {
+  const auth = await requireStaffAuth(request, { permission: "promotions.view" });
+  if (!auth.ok) return auth.response;
+
   try {
     const promotions = getPromotionsFromSqlite();
     return NextResponse.json({
@@ -31,9 +35,23 @@ export async function GET() {
  * POST: Tạo mới mã khuyến mãi
  */
 export async function POST(request: Request) {
+  const auth = await requireStaffAuth(request, { permission: "promotions.manage" });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json();
-    const { code, name, discountType, discountValue, minOrderAmount, isActive, maxDiscountAmount } = body;
+    const {
+      code,
+      name,
+      discountType,
+      discountValue,
+      minOrderAmount,
+      isActive,
+      maxDiscountAmount,
+      usageLimit,
+      startTime,
+      endTime,
+    } = body;
 
     const result = createPromotionInSqlite({
       code,
@@ -43,6 +61,9 @@ export async function POST(request: Request) {
       minOrderAmount: Number(minOrderAmount) || 0,
       isActive: isActive !== false,
       maxDiscountAmount: maxDiscountAmount ? Number(maxDiscountAmount) : null,
+      usageLimit: usageLimit ? Number(usageLimit) : null,
+      startTime: startTime || null,
+      endTime: endTime || null,
     });
 
     if (!result.success) {
@@ -69,6 +90,9 @@ export async function POST(request: Request) {
  * PATCH: Cập nhật thông tin hoặc chuyển đổi trạng thái bật/tắt
  */
 export async function PATCH(request: Request) {
+  const auth = await requireStaffAuth(request, { permission: "promotions.manage" });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await request.json();
     const { action, id } = body;
@@ -96,7 +120,19 @@ export async function PATCH(request: Request) {
     }
 
     if (action === "UPDATE") {
-      const { code, name, discountType, discountValue, minOrderAmount, isActive, maxDiscountAmount } = body.data || body;
+      const payload = body.data || body;
+      const {
+        code,
+        name,
+        discountType,
+        discountValue,
+        minOrderAmount,
+        isActive,
+        maxDiscountAmount,
+        usageLimit,
+        startTime,
+        endTime,
+      } = payload;
       const result = updatePromotionInSqlite(Number(id), {
         code,
         name,
@@ -104,7 +140,16 @@ export async function PATCH(request: Request) {
         discountValue: discountValue !== undefined ? Number(discountValue) : undefined,
         minOrderAmount: minOrderAmount !== undefined ? Number(minOrderAmount) : undefined,
         isActive,
-        maxDiscountAmount: maxDiscountAmount !== undefined ? (maxDiscountAmount ? Number(maxDiscountAmount) : null) : undefined,
+        maxDiscountAmount:
+          maxDiscountAmount !== undefined
+            ? maxDiscountAmount
+              ? Number(maxDiscountAmount)
+              : null
+            : undefined,
+        usageLimit:
+          usageLimit !== undefined ? (usageLimit ? Number(usageLimit) : null) : undefined,
+        startTime: startTime !== undefined ? startTime || null : undefined,
+        endTime: endTime !== undefined ? endTime || null : undefined,
       });
 
       if (!result.success) {
@@ -137,6 +182,9 @@ export async function PATCH(request: Request) {
  * DELETE: Xóa vĩnh viễn mã khuyến mãi
  */
 export async function DELETE(request: Request) {
+  const auth = await requireStaffAuth(request, { permission: "promotions.manage" });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(request.url);
     const idParam = searchParams.get("id");

@@ -1,23 +1,14 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { verifyAuthToken, COOKIE_NAME } from "@/lib/auth";
+import { getAuthenticatedStaff } from "@/lib/serverAuth";
 
-export async function GET() {
-  const cookieStore = cookies();
-  const token = cookieStore.get(COOKIE_NAME)?.value;
+export const dynamic = "force-dynamic";
 
-  if (!token) {
+export async function GET(request: Request) {
+  const staff = await getAuthenticatedStaff(request);
+
+  if (!staff) {
     return NextResponse.json(
-      { success: false, message: "Chưa đăng nhập", user: null },
-      { status: 401 }
-    );
-  }
-
-  const payload = await verifyAuthToken(token);
-
-  if (!payload) {
-    return NextResponse.json(
-      { success: false, message: "Phiên đăng nhập đã hết hạn", user: null },
+      { success: false, message: "Phiên đăng nhập không hợp lệ hoặc đã hết hạn", user: null },
       { status: 401 }
     );
   }
@@ -25,10 +16,11 @@ export async function GET() {
   return NextResponse.json({
     success: true,
     user: {
-      id: payload.sub,
-      username: payload.username,
-      fullName: payload.fullName,
-      role: payload.role,
+      id: staff.id,
+      username: staff.username,
+      fullName: staff.fullName,
+      role: staff.role,
+      permissions: staff.permissions,
     },
   });
 }
